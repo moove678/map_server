@@ -18,7 +18,7 @@ USERS_FILE = "users.json"
 ROUTES_DIR = "routes"
 CONFIG_FILE = "config.json"
 OFFLINE_ROUTES_FILE = "offline_routes.json"
-LOCALTUNNEL_RETRY_LIMIT = 5  # <- Можно удалить, если не нужно
+LOCALTUNNEL_RETRY_LIMIT = 5  # (Не используется – можно удалить, если больше не нужен)
 
 # Глобальные структуры данных и блокировки
 ONLINE_USERS = set()
@@ -80,6 +80,11 @@ def filter_route(points, threshold=5):
         if haversine_distance(last_point[0], last_point[1], point[0], point[1]) >= threshold:
             filtered.append(point)
     return filtered
+
+# ====== ДОБАВЛЯЕМ КОРНЕВОЙ МАРШРУТ ======
+@app.route("/")
+def index():
+    return "Hello! This is the root route of the Flask server."
 
 # ====== ЭНДПОИНТЫ ======
 
