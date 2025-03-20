@@ -18,7 +18,7 @@ USERS_FILE = "users.json"
 ROUTES_DIR = "routes"
 CONFIG_FILE = "config.json"
 OFFLINE_ROUTES_FILE = "offline_routes.json"
-LOCALTUNNEL_RETRY_LIMIT = 5
+LOCALTUNNEL_RETRY_LIMIT = 5  # <- Можно удалить, если не нужно
 
 # Глобальные структуры данных и блокировки
 ONLINE_USERS = set()
@@ -28,64 +28,6 @@ users_lock = threading.Lock()
 # Создаём папку для маршрутов, если её нет
 if not os.path.exists(ROUTES_DIR):
     os.makedirs(ROUTES_DIR)
-
-# ====== ФУНКЦИИ LOCALTUNNEL ======
-def stop_all_localtunnel():
-    """Останавливает все запущенные процессы localtunnel"""
-    try:
-        subprocess.call(["pkill", "-f", "lt"])
-        time.sleep(2)
-    except Exception as e:
-        logging.error(f"Error stopping localtunnel: {e}")
-
-def start_localtunnel():
-    """Запускает localtunnel и получает публичный URL"""
-    stop_all_localtunnel()
-    try:
-        lt_process = subprocess.Popen(
-            ["lt", "--port", "5000"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            preexec_fn=os.setsid
-        )
-    except Exception as e:
-        logging.error(f"Error starting localtunnel process: {e}")
-        return None, None
-
-    # Немного подождём, чтобы localtunnel успел вывести данные
-    time.sleep(5)
-    attempt = 0
-    lt_url = None
-    while attempt < LOCALTUNNEL_RETRY_LIMIT and lt_url is None:
-        try:
-            line = lt_process.stdout.readline().strip()
-            if "https://" in line:
-                lt_url = line
-                save_server_url(lt_url)
-                logging.info(f"✅ Localtunnel started! Public URL: {lt_url}")
-                return lt_process, lt_url
-        except Exception as e:
-            logging.error(f"Attempt {attempt+1}: error getting localtunnel URL: {e}")
-        attempt += 1
-        time.sleep(2)
-
-    stop_all_localtunnel()
-    logging.error("Failed to get localtunnel URL after several attempts.")
-    return None, None
-
-def save_server_url(url):
-    """Сохраняет URL сервера в config.json"""
-    try:
-        with open(CONFIG_FILE, "w") as f:
-            json.dump({"server_url": url}, f, indent=4)
-    except Exception as e:
-        logging.error(f"Error saving server URL: {e}")
-
-lt_process, SERVER_URL = start_localtunnel()
-if SERVER_URL is None:
-    SERVER_URL = "http://localhost:5000"
-    logging.warning(f"Using fallback server URL: {SERVER_URL}")
 
 # ====== ФУНКЦИИ РАБОТЫ С ДАННЫМИ ======
 def load_json(file_path, default_data):
@@ -189,8 +131,10 @@ def update_user_location():
 @app.route("/get_users", methods=["GET"])
 def get_users():
     with users_lock:
-        active_users = [{"username": u["username"], "lat": u["lat"], "lon": u["lon"]}
-                        for u in users if u["username"] in ONLINE_USERS and u["lat"] is not None]
+        active_users = [
+            {"username": u["username"], "lat": u["lat"], "lon": u["lon"]}
+            for u in users if u["username"] in ONLINE_USERS and u["lat"] is not None
+        ]
     return jsonify(active_users), 200
 
 @app.route("/start_route", methods=["POST"])
