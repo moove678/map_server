@@ -52,6 +52,7 @@ def start_localtunnel():
     except Exception as e:
         logging.error(f"Error starting localtunnel process: {e}")
         return None, None
+
     # Немного подождём, чтобы localtunnel успел вывести данные
     time.sleep(5)
     attempt = 0
@@ -68,6 +69,7 @@ def start_localtunnel():
             logging.error(f"Attempt {attempt+1}: error getting localtunnel URL: {e}")
         attempt += 1
         time.sleep(2)
+
     stop_all_localtunnel()
     logging.error("Failed to get localtunnel URL after several attempts.")
     return None, None
@@ -139,7 +141,6 @@ def filter_route(points, threshold=5):
 
 # ====== ЭНДПОИНТЫ ======
 
-# Регистрация
 @app.route("/register", methods=["POST"])
 def register():
     data = request.get_json()
@@ -156,7 +157,6 @@ def register():
         save_json(USERS_FILE, users)
     return jsonify({"message": "Registration successful!"}), 200
 
-# Авторизация
 @app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
@@ -171,7 +171,6 @@ def login():
                 return jsonify({"message": "Login successful!"}), 200
     return jsonify({"error": "Invalid username or password"}), 401
 
-# Обновление координат пользователя
 @app.route("/update_location", methods=["POST"])
 def update_user_location():
     data = request.get_json()
@@ -187,7 +186,6 @@ def update_user_location():
                 return jsonify({"message": "Location updated"}), 200
     return jsonify({"error": "User not found"}), 404
 
-# Получение списка активных пользователей
 @app.route("/get_users", methods=["GET"])
 def get_users():
     with users_lock:
@@ -195,7 +193,6 @@ def get_users():
                         for u in users if u["username"] in ONLINE_USERS and u["lat"] is not None]
     return jsonify(active_users), 200
 
-# Начало записи маршрута
 @app.route("/start_route", methods=["POST"])
 def start_route():
     data = request.get_json()
@@ -213,7 +210,6 @@ def start_route():
     active_routes[username] = route_name
     return jsonify({"message": "Route recording started", "route_name": route_name}), 200
 
-# Добавление точки в маршрут
 @app.route("/record_route", methods=["POST"])
 def record_route():
     data = request.get_json()
@@ -237,7 +233,6 @@ def record_route():
         return jsonify({"error": "Failed to add point"}), 500
     return jsonify({"message": "Point added"}), 200
 
-# Загрузка маршрута
 @app.route("/load_route", methods=["POST"])
 def load_route():
     data = request.get_json()
@@ -254,7 +249,6 @@ def load_route():
         return jsonify({"error": "Failed to load route"}), 500
     return jsonify(route_data), 200
 
-# Удаление маршрута
 @app.route("/delete_route", methods=["POST"])
 def delete_route():
     data = request.get_json()
@@ -270,7 +264,6 @@ def delete_route():
             return jsonify({"error": "Failed to delete route"}), 500
     return jsonify({"error": "Route not found"}), 404
 
-# Добавление примечания/фото к маршруту
 @app.route("/add_note", methods=["POST"])
 def add_note():
     data = request.get_json()
@@ -296,7 +289,6 @@ def add_note():
         return jsonify({"error": "Failed to add note"}), 500
     return jsonify({"message": "Note added"}), 200
 
-# Получение списка маршрутов
 @app.route("/get_routes", methods=["GET"])
 def get_routes():
     routes = []
@@ -309,7 +301,6 @@ def get_routes():
         return jsonify({"error": "Failed to list routes"}), 500
     return jsonify(routes), 200
 
-# Сохранение маршрута (для оффлайн-синхронизации) с фильтрацией координат
 @app.route("/save_route", methods=["POST"])
 def save_route():
     data = request.get_json()
@@ -317,7 +308,6 @@ def save_route():
         return jsonify({"error": "Missing data"}), 400
     route_file = os.path.join(ROUTES_DIR, f"{data['route_name']}.json")
     try:
-        # Фильтруем координаты (оставляем только точки с расстоянием >= 5 метров)
         points = [(pt["lat"], pt["lon"]) for pt in data["coordinates"]]
         filtered_points = filter_route(points, threshold=5)
         with open(route_file, "w") as f:
@@ -332,7 +322,6 @@ def save_route():
 
 # ====== ЗАПУСК СЕРВЕРА ======
 if __name__ == "__main__":
-    # Используем порт из переменной окружения (если он задан), иначе 5000
     port = int(os.environ.get("PORT", 5000))
     logging.info(f"Запуск сервера на порту {port}...")
     app.run(host="0.0.0.0", port=port)
