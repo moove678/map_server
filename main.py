@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import subprocess
 import logging
 import threading
 import math
@@ -16,9 +15,7 @@ app = Flask(__name__)
 # ====== КОНСТАНТЫ ======
 USERS_FILE = "users.json"
 ROUTES_DIR = "routes"
-CONFIG_FILE = "config.json"
 OFFLINE_ROUTES_FILE = "offline_routes.json"
-LOCALTUNNEL_RETRY_LIMIT = 5  # (Не используется – можно удалить, если больше не нужен)
 
 # Глобальные структуры данных и блокировки
 ONLINE_USERS = set()
@@ -29,49 +26,42 @@ users_lock = threading.Lock()
 if not os.path.exists(ROUTES_DIR):
     os.makedirs(ROUTES_DIR)
 
-# ====== ФУНКЦИИ РАБОТЫ С ДАННЫМИ ======
+# ====== ФУНКЦИИ РАБОТЫ С JSON ======
 def load_json(file_path, default_data):
-    """Загружает данные из JSON-файла"""
     if os.path.exists(file_path):
         try:
             with open(file_path, "r") as f:
                 return json.load(f)
         except json.JSONDecodeError:
-            logging.error(f"JSON decode error in {file_path}, using default data.")
+            logging.error(f"JSON decode error in {file_path}, используем данные по умолчанию.")
             return default_data
     return default_data
 
 def save_json(file_path, data):
-    """Сохраняет данные в JSON-файл"""
     try:
         with open(file_path, "w") as f:
             json.dump(data, f, indent=4)
     except Exception as e:
-        logging.error(f"Error saving JSON to {file_path}: {e}")
+        logging.error(f"Ошибка при сохранении JSON в {file_path}: {e}")
 
+# Загружаем пользователей и маршруты
 with users_lock:
     users = load_json(USERS_FILE, [])
 offline_routes = load_json(OFFLINE_ROUTES_FILE, [])
 
-# ====== ФУНКЦИИ ФИЛЬТРАЦИИ КООРДИНАТ ======
+# ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
 def haversine_distance(lat1, lon1, lat2, lon2):
-    """
-    Вычисляет расстояние между двумя точками на Земле в метрах.
-    """
-    R = 6371000  # Радиус Земли в метрах
+    R = 6371000
     phi1 = math.radians(lat1)
     phi2 = math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
     delta_lambda = math.radians(lon2 - lon1)
-    a = math.sin(delta_phi/2)**2 + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda/2)**2
+    a = (math.sin(delta_phi / 2) ** 2 +
+         math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
 def filter_route(points, threshold=5):
-    """
-    Фильтрует список точек, оставляя только те, между которыми расстояние больше threshold (в метрах).
-    Точки задаются в формате [(lat, lon), ...]
-    """
     if not points:
         return points
     filtered = [points[0]]
@@ -81,12 +71,15 @@ def filter_route(points, threshold=5):
             filtered.append(point)
     return filtered
 
-# ====== ДОБАВЛЯЕМ КОРНЕВОЙ МАРШРУТ ======
+# ====== ЭНДПОИНТЫ ======
+
 @app.route("/")
 def index():
-    return "Hello! This is the root route of the Flask server."
+    return "Сервер Flask работает!"
 
-# ====== ЭНДПОИНТЫ ======
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"status": "ok"}), 200
 
 @app.route("/register", methods=["POST"])
 def register():
@@ -119,7 +112,7 @@ def login():
     return jsonify({"error": "Invalid username or password"}), 401
 
 @app.route("/update_location", methods=["POST"])
-def update_user_location():
+def update_location():
     data = request.get_json()
     if "username" not in data or "lat" not in data or "lon" not in data:
         return jsonify({"error": "Missing data"}), 400
@@ -138,7 +131,8 @@ def get_users():
     with users_lock:
         active_users = [
             {"username": u["username"], "lat": u["lat"], "lon": u["lon"]}
-            for u in users if u["username"] in ONLINE_USERS and u["lat"] is not None
+            for u in users
+            if u["username"] in ONLINE_USERS and u["lat"] is not None and u["lon"] is not None
         ]
     return jsonify(active_users), 200
 
@@ -171,9 +165,7 @@ def record_route():
         with open(route_file, "r") as f:
             route_data = json.load(f)
         route_data["coordinates"].append({
-            "lat": data["lat"],
-            "lon": data["lon"],
-            "timestamp": time.time()
+            "lat": data["lat"], "lon": data["lon"], "timestamp": time.time()
         })
         with open(route_file, "w") as f:
             json.dump(route_data, f, indent=4)
@@ -225,16 +217,14 @@ def add_note():
         with open(route_file, "r") as f:
             route_data = json.load(f)
         note = {
-            "lat": data["lat"],
-            "lon": data["lon"],
-            "text": data["text"],
-            "photo": data.get("photo")
+            "lat": data["lat"], "lon": data["lon"],
+            "text": data["text"], "photo": data.get("photo")
         }
         route_data["markers"].append(note)
         with open(route_file, "w") as f:
             json.dump(route_data, f, indent=4)
     except Exception as e:
-        logging.error(f"Error adding note to route {data['route_name']}: {e}")
+        logging.error(f"Error adding note: {e}")
         return jsonify({"error": "Failed to add note"}), 500
     return jsonify({"message": "Note added"}), 200
 
@@ -269,8 +259,8 @@ def save_route():
         return jsonify({"error": "Failed to save route"}), 500
     return jsonify({"message": "Route saved"}), 200
 
-# ====== ЗАПУСК СЕРВЕРА ======
+# ====== ЗАПУСК ======
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = 5000
     logging.info(f"Запуск сервера на порту {port}...")
     app.run(host="0.0.0.0", port=port)
