@@ -1,322 +1,87 @@
 import os
-import json
-import time
-import logging
-import threading
-import math
-
-from flask import Flask, request, jsonify
-from werkzeug.security import generate_password_hash, check_password_hash
-
-# Настройка логирования
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+import subprocess
+import shlex
+from flask import Flask, request, jsonify, send_from_directory
 
 app = Flask(__name__)
 
-# ====== КОНСТАНТЫ ======
-USERS_FILE = "users.json"
-ROUTES_DIR = "routes"
-OFFLINE_ROUTES_FILE = "offline_routes.json"
+# Абсолютный путь к твоей папке со сборкой (где лежит main.py и buildozer.spec)
+BUILD_DIR = "/home/ubuntu/PythonAPKProjects"
+# Папка, где появляется готовый APK (по умолчанию bin/)
+BIN_DIR = os.path.join(BUILD_DIR, "bin")
 
-# Глобальные структуры данных и блокировки
-ONLINE_USERS = set()
-active_routes = {}
-users_lock = threading.Lock()
-
-# Создаём папку для маршрутов, если её нет
-if not os.path.exists(ROUTES_DIR):
-    os.makedirs(ROUTES_DIR)
-
-# ====== ФУНКЦИИ РАБОТЫ С JSON ======
-def load_json(file_path, default_data):
-    """Загружает данные из JSON-файла"""
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            logging.error(f"JSON decode error in {file_path}, используем данные по умолчанию.")
-            return default_data
-    return default_data
-
-def save_json(file_path, data):
-    """Сохраняет данные в JSON-файл"""
-    try:
-        with open(file_path, "w") as f:
-            json.dump(data, f, indent=4)
-    except Exception as e:
-        logging.error(f"Ошибка при сохранении JSON в {file_path}: {e}")
-
-# Загружаем данные пользователей и оффлайн-маршруты
-with users_lock:
-    users = load_json(USERS_FILE, [])
-offline_routes = load_json(OFFLINE_ROUTES_FILE, [])
-
-# ====== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======
-def haversine_distance(lat1, lon1, lat2, lon2):
-    """
-    Вычисляет расстояние между двумя точками на Земле (в метрах).
-    """
-    R = 6371000  # Радиус Земли в метрах
-    phi1 = math.radians(lat1)
-    phi2 = math.radians(lat2)
-    delta_phi = math.radians(lat2 - lat1)
-    delta_lambda = math.radians(lon2 - lon1)
-    a = (math.sin(delta_phi / 2) ** 2
-         + math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
-def filter_route(points, threshold=5):
-    """
-    Фильтрует список точек ([(lat, lon), ...]),
-    оставляя только те, между которыми расстояние > threshold метров.
-    """
-    if not points:
-        return points
-    filtered = [points[0]]
-    for point in points[1:]:
-        last_point = filtered[-1]
-        if haversine_distance(last_point[0], last_point[1], point[0], point[1]) >= threshold:
-            filtered.append(point)
-    return filtered
-
-# ====== КОРНЕВОЙ МАРШРУТ ======
 @app.route("/")
 def index():
-    return "Сервер Flask работает! Это корневой маршрут."
+    return "Сервер сборки APK запущен и работает!"
 
-# ====== ЭНДПОИНТЫ ПОЛЬЗОВАТЕЛЕЙ ======
-@app.route("/register", methods=["POST"])
-def register():
-    data = request.get_json()
-    if not data or "username" not in data or "password" not in data:
-        return jsonify({"error": "Insufficient data"}), 400
+@app.route("/upload", methods=["POST"])
+def upload():
+    """
+    Принимает форму (multipart/form-data или application/x-www-form-urlencoded) с полями:
+      - filename (например, 'main.py' или 'buildozer.spec')
+      - code (текст кода)
+    Очищает файл, записывает 'code', запускает сборку buildozer.
+    Возвращает JSON с логом сборки и ссылкой на APK.
+    """
+    filename = request.form.get("filename")
+    code = request.form.get("code")
 
-    username = data["username"]
-    password = data["password"]
+    if not filename or not code:
+        return jsonify({"error": "Поля 'filename' и 'code' обязательны"}), 400
 
-    with users_lock:
-        # Проверяем, не существует ли пользователь
-        for user in users:
-            if user["username"] == username:
-                return jsonify({"error": "User already exists"}), 409
+    # Путь к нужному файлу в BUILD_DIR
+    file_path = os.path.join(BUILD_DIR, filename)
 
-        # Создаём хэш пароля и сохраняем
-        hashed_password = generate_password_hash(password)
-        users.append({
-            "username": username,
-            "password": hashed_password,
-            "lat": None,
-            "lon": None
-        })
-        save_json(USERS_FILE, users)
+    # Проверяем, что файл лежит в папке BUILD_DIR (простейшая защита)
+    if not os.path.abspath(file_path).startswith(os.path.abspath(BUILD_DIR)):
+        return jsonify({"error": "Недопустимое имя файла"}), 400
 
-    return jsonify({"message": "Registration successful!"}), 200
-
-@app.route("/login", methods=["POST"])
-def login():
-    data = request.get_json()
-    if not data or "username" not in data or "password" not in data:
-        return jsonify({"error": "Insufficient data"}), 400
-
-    username = data["username"]
-    password = data["password"]
-
-    with users_lock:
-        for user in users:
-            if user["username"] == username and check_password_hash(user["password"], password):
-                ONLINE_USERS.add(username)
-                return jsonify({"message": "Login successful!"}), 200
-
-    return jsonify({"error": "Invalid username or password"}), 401
-
-@app.route("/update_location", methods=["POST"])
-def update_location():
-    data = request.get_json()
-    if "username" not in data or "lat" not in data or "lon" not in data:
-        return jsonify({"error": "Missing data"}), 400
-
-    username = data["username"]
-
-    with users_lock:
-        for user in users:
-            if user["username"] == username:
-                user["lat"] = data["lat"]
-                user["lon"] = data["lon"]
-                save_json(USERS_FILE, users)
-                return jsonify({"message": "Location updated"}), 200
-
-    return jsonify({"error": "User not found"}), 404
-
-@app.route("/get_users", methods=["GET"])
-def get_users():
-    with users_lock:
-        active_users = []
-        for u in users:
-            if u["username"] in ONLINE_USERS and u["lat"] is not None and u["lon"] is not None:
-                active_users.append({
-                    "username": u["username"],
-                    "lat": u["lat"],
-                    "lon": u["lon"]
-                })
-    return jsonify(active_users), 200
-
-# ====== ЭНДПОИНТЫ РАБОТЫ С МАРШРУТАМИ ======
-@app.route("/start_route", methods=["POST"])
-def start_route():
-    data = request.get_json()
-    if "username" not in data:
-        return jsonify({"error": "Missing data"}), 400
-
-    username = data["username"]
-    route_name = f"{username}_route_{int(time.time())}"
-    route_file = os.path.join(ROUTES_DIR, f"{route_name}.json")
-
+    # Записываем новый код, стирая старое содержимое
     try:
-        with open(route_file, "w") as f:
-            json.dump({"coordinates": [], "markers": []}, f)
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(code)
     except Exception as e:
-        logging.error(f"Error creating route file {route_file}: {e}")
-        return jsonify({"error": "Failed to start route recording"}), 500
+        return jsonify({"error": f"Не удалось записать файл: {str(e)}"}), 500
 
-    active_routes[username] = route_name
-    return jsonify({"message": "Route recording started", "route_name": route_name}), 200
-
-@app.route("/record_route", methods=["POST"])
-def record_route():
-    data = request.get_json()
-    if "username" not in data or "route_name" not in data or "lat" not in data or "lon" not in data:
-        return jsonify({"error": "Missing data"}), 400
-
-    route_file = os.path.join(ROUTES_DIR, f"{data['route_name']}.json")
-    if not os.path.exists(route_file):
-        return jsonify({"error": "Route not found"}), 404
-
+    # Запускаем buildozer
+    cmd = ["buildozer", "-v", "android", "debug"]
     try:
-        with open(route_file, "r") as f:
-            route_data = json.load(f)
-
-        route_data["coordinates"].append({
-            "lat": data["lat"],
-            "lon": data["lon"],
-            "timestamp": time.time()
-        })
-
-        with open(route_file, "w") as f:
-            json.dump(route_data, f, indent=4)
-
+        process = subprocess.run(
+            cmd,
+            cwd=BUILD_DIR,
+            capture_output=True,
+            text=True,
+            check=False  # не кидаем исключение, если сборка завершится с ошибкой
+        )
     except Exception as e:
-        logging.error(f"Error recording route point: {e}")
-        return jsonify({"error": "Failed to add point"}), 500
+        return jsonify({"error": f"Не удалось запустить buildozer: {str(e)}"}), 500
 
-    return jsonify({"message": "Point added"}), 200
+    # Лог сборки (stdout + stderr)
+    build_log = process.stdout + "\n" + process.stderr
 
-@app.route("/load_route", methods=["POST"])
-def load_route():
-    data = request.get_json()
-    if "route_name" not in data:
-        return jsonify({"error": "Missing data"}), 400
+    # Имя файла с APK — по умолчанию Buildozer кладёт в bin/<название>-0.1-debug.apk
+    # Если название приложения в buildozer.spec = MapApp, он сделает MapApp-0.1-debug.apk и т.п.
+    # Ниже просто пример — при необходимости адаптируй:
+    apk_name = "MapApp-0.1-debug.apk"
 
-    route_file = os.path.join(ROUTES_DIR, f"{data['route_name']}.json")
-    if not os.path.exists(route_file):
-        return jsonify({"error": "Route not found"}), 404
+    # Формируем ссылку для скачивания
+    download_url = f"{request.host_url}download/{apk_name}"
 
-    try:
-        with open(route_file, "r") as f:
-            route_data = json.load(f)
-    except Exception as e:
-        logging.error(f"Error loading route {route_file}: {e}")
-        return jsonify({"error": "Failed to load route"}), 500
+    # Возвращаем результат
+    return jsonify({
+        "message": "Сборка завершена",
+        "build_log": build_log,
+        "apk_url": download_url
+    })
 
-    return jsonify(route_data), 200
+@app.route("/download/<path:filename>", methods=["GET"])
+def download(filename):
+    """
+    Позволяет скачать любой файл из папки bin/
+    Например, /download/MapApp-0.1-debug.apk
+    """
+    return send_from_directory(BIN_DIR, filename, as_attachment=True)
 
-@app.route("/delete_route", methods=["POST"])
-def delete_route():
-    data = request.get_json()
-    if "route_name" not in data:
-        return jsonify({"error": "Missing data"}), 400
-
-    route_file = os.path.join(ROUTES_DIR, f"{data['route_name']}.json")
-    if os.path.exists(route_file):
-        try:
-            os.remove(route_file)
-            return jsonify({"message": f"Route {data['route_name']} deleted."}), 200
-        except Exception as e:
-            logging.error(f"Error deleting route {route_file}: {e}")
-            return jsonify({"error": "Failed to delete route"}), 500
-
-    return jsonify({"error": "Route not found"}), 404
-
-@app.route("/add_note", methods=["POST"])
-def add_note():
-    data = request.get_json()
-    if ("route_name" not in data or "lat" not in data or
-        "lon" not in data or "text" not in data):
-        return jsonify({"error": "Missing data"}), 400
-
-    route_file = os.path.join(ROUTES_DIR, f"{data['route_name']}.json")
-    if not os.path.exists(route_file):
-        return jsonify({"error": "Route not found"}), 404
-
-    try:
-        with open(route_file, "r") as f:
-            route_data = json.load(f)
-
-        note = {
-            "lat": data["lat"],
-            "lon": data["lon"],
-            "text": data["text"],
-            "photo": data.get("photo")  # Если фото тоже передаётся
-        }
-        route_data["markers"].append(note)
-
-        with open(route_file, "w") as f:
-            json.dump(route_data, f, indent=4)
-
-    except Exception as e:
-        logging.error(f"Error adding note: {e}")
-        return jsonify({"error": "Failed to add note"}), 500
-
-    return jsonify({"message": "Note added"}), 200
-
-@app.route("/get_routes", methods=["GET"])
-def get_routes():
-    routes = []
-    try:
-        for filename in os.listdir(ROUTES_DIR):
-            if filename.endswith(".json"):
-                routes.append(filename[:-5])
-    except Exception as e:
-        logging.error(f"Error listing routes: {e}")
-        return jsonify({"error": "Failed to list routes"}), 500
-
-    return jsonify(routes), 200
-
-@app.route("/save_route", methods=["POST"])
-def save_route():
-    data = request.get_json()
-    if "username" not in data or "route_name" not in data or "coordinates" not in data:
-        return jsonify({"error": "Missing data"}), 400
-
-    route_file = os.path.join(ROUTES_DIR, f"{data['route_name']}.json")
-
-    try:
-        points = [(pt["lat"], pt["lon"]) for pt in data["coordinates"]]
-        filtered_points = filter_route(points, threshold=5)
-        with open(route_file, "w") as f:
-            json.dump({
-                "coordinates": [{"lat": lat, "lon": lon} for lat, lon in filtered_points],
-                "markers": data.get("notes", [])
-            }, f, indent=4)
-    except Exception as e:
-        logging.error(f"Error saving route {data['route_name']}: {e}")
-        return jsonify({"error": "Failed to save route"}), 500
-
-    return jsonify({"message": "Route saved"}), 200
-
-# ====== ЗАПУСК СЕРВЕРА ======
 if __name__ == "__main__":
-    port = 5000
-    logging.info(f"Запуск сервера на порту {port}...")
-    app.run(host="0.0.0.0", port=port)
+    # Запуск Flask-сервера на порту 8000, слушаем все интерфейсы
+    app.run(host="0.0.0.0", port=8001, debug=False)
