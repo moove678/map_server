@@ -1,4 +1,10 @@
-alembic==1.15.2
+venv/
+__pycache__/
+*.pyc
+instance/
+*.db
+uploads/
+.envalembic==1.15.2
 annotated-types==0.7.0
 anyio==4.8.0
 bcrypt==4.3.0
@@ -54,7 +60,3 @@ uvicorn==0.34.0
 waitress==3.0.2
 websockets==15.0.1
 Werkzeug==3.1.3
-Flask==x.y.z
-Flask_SQLAlchemy==x.y.z
-Flask_Migrate==x.y.z
-gunicorn==x.y.z
