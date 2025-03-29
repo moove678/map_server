@@ -4,6 +4,7 @@ import math
 import logging
 import json
 from datetime import datetime
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -25,13 +26,13 @@ if not os.path.exists(UPLOAD_FOLDER):
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
-# --------------------- Модели ---------------------
 
+# --------------------- Модели ---------------------
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)
-    # добавили поля для координат
+    # координаты
     lat = db.Column(db.Float, nullable=True)
     lon = db.Column(db.Float, nullable=True)
     updated_at = db.Column(db.DateTime, nullable=True)
@@ -62,8 +63,8 @@ class Route(db.Model):
     avg_speed = db.Column(db.Float, default=0)
     date = db.Column(db.Date, default=datetime.utcnow().date)
 
-# --------------------- Эндпоинты ---------------------
 
+# --------------------- Эндпоинты ---------------------
 @app.route("/ping", methods=["GET"])
 def ping():
     return jsonify({"status": "ok"}), 200
@@ -138,10 +139,10 @@ def get_groups():
 def join_group():
     data = request.get_json()
     group_id = data.get("group_id")
-    # упрощаем
     grp = Group.query.filter_by(id=group_id).first()
     if not grp:
         return jsonify({"error": "Group not found"}), 404
+    # упрощённо
     return jsonify({"message": "Joined group"}), 200
 
 @app.route("/delete_group", methods=["POST"])
@@ -189,10 +190,13 @@ def send_message():
 def get_messages():
     group_id = request.args.get("group_id")
     after_id = int(request.args.get("after_id", 0))
-    msgs = GroupMessage.query.filter(GroupMessage.group_id==group_id, GroupMessage.id>after_id).all()
-    result=[]
+    msgs = GroupMessage.query.filter(
+        GroupMessage.group_id==group_id,
+        GroupMessage.id>after_id
+    ).all()
+    result = []
     for m in msgs:
-        item={
+        item = {
             "id": m.id,
             "username": m.username,
             "text": m.text,
@@ -205,7 +209,8 @@ def get_messages():
         result.append(item)
     return jsonify(result), 200
 
-# ----------------- новый эндпоинт ----------------
+
+# ------------ Новый эндпоинт для «других пользователей в радиусе» -----------
 @app.route("/get_users_in_radius", methods=["GET"])
 def get_users_in_radius():
     lat_str = request.args.get("lat", "0")
@@ -219,11 +224,11 @@ def get_users_in_radius():
         return jsonify([]), 200
 
     users = User.query.all()
-    out=[]
+    out = []
     for u in users:
         if u.lat is not None and u.lon is not None:
             dist = distance_km(lat0, lon0, u.lat, u.lon)
-            if dist<=radius_km:
+            if dist <= radius_km:
                 out.append({
                     "username": u.username,
                     "lat": u.lat,
@@ -233,11 +238,14 @@ def get_users_in_radius():
     return jsonify(out), 200
 
 def distance_km(lat1, lon1, lat2, lon2):
-    R=6371
-    dlat=math.radians(lat2-lat1)
-    dlon=math.radians(lon2-lon1)
-    a=math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
-    c=2*math.atan2(math.sqrt(a), math.sqrt(1-a))
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (math.sin(dlat/2)**2 +
+         math.cos(math.radians(lat1)) *
+         math.cos(math.radians(lat2)) *
+         math.sin(dlon/2)**2)
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
     return R*c
 
 
@@ -263,9 +271,8 @@ def upload_route():
 
 @app.route("/get_routes", methods=["GET"])
 def get_routes():
-    # Для примера без фильтра
     all_r = Route.query.all()
-    out=[]
+    out = []
     for r in all_r:
         out.append({
             "id": r.id,
@@ -284,6 +291,7 @@ def get_routes():
 @app.route("/uploads/<filename>")
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
 
 if __name__=="__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
