@@ -58,3 +58,4 @@ Flask
 Flask_SQLAlchemy
 Flask_Migrate
 gunicorn
+flask_jwt_extended
