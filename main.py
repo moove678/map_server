@@ -15,23 +15,24 @@ from flask_jwt_extended import (
     jwt_required, get_jwt_identity
 )
 
-# ----------------------------------------------
-# Конфигурация приложения
-# ----------------------------------------------
+#################################################################
+# Инициализация приложения Flask
+#################################################################
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'very-secret-flask-key'
-# JWT-секрет (можно задать отдельно)
-app.config['JWT_SECRET_KEY'] = 'very-secret-jwt-key'
+
+# Секретные ключи (Можно переопределить в .env или Railway Variables)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'very-secret-flask-key')
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'very-secret-jwt-key')
 
 # Путь к SQLite
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.sqlite'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Чтобы юникод в JSON не экранировался:
+# Чтобы юникод в JSON не экранировался
 app.config['JSON_AS_ASCII'] = False
 
-# Папка для сохранения загруженных файлов (фото, аудио):
+# Папка для загрузки файлов
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -41,9 +42,9 @@ jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
 
-# ----------------------------------------------
-# Модели
-# ----------------------------------------------
+#################################################################
+# Модели БД
+#################################################################
 
 class User(db.Model):
     """Пользователи (логин, пароль, координаты)."""
@@ -60,14 +61,12 @@ class User(db.Model):
             "lon": self.lon
         }
 
-
-# Связка многие-ко-многим "Group <-> User"
+# Многие-ко-многим "Group <-> User"
 GroupMembers = db.Table(
     'group_members',
     db.Column('group_id', db.String(36), db.ForeignKey('group.id'), primary_key=True),
     db.Column('username', db.String(80), db.ForeignKey('user.username'), primary_key=True)
 )
-
 
 class Group(db.Model):
     """Группы (чат)."""
@@ -75,7 +74,7 @@ class Group(db.Model):
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
     owner = db.Column(db.String(80))  # user.username
-    # участники
+    # Участники
     members = db.relationship("User", secondary=GroupMembers, backref="groups")
 
     def to_json(self):
@@ -84,7 +83,6 @@ class Group(db.Model):
             "name": self.name,
             "owner": self.owner
         }
-
 
 class Message(db.Model):
     """Сообщения в чате."""
@@ -97,7 +95,6 @@ class Message(db.Model):
     photo = db.Column(db.String(200), default=None)  # имя файла
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 class Route(db.Model):
     """Таблица маршрутов."""
     __tablename__ = 'route'
@@ -106,7 +103,6 @@ class Route(db.Model):
     username = db.Column(db.String(80), db.ForeignKey('user.username'))
     distance = db.Column(db.Float, default=0.0)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    # is_public, etc. – по желанию
 
 class RoutePoint(db.Model):
     """Точки маршрута."""
@@ -125,24 +121,12 @@ class RouteComment(db.Model):
     lon = db.Column(db.Float)
     text = db.Column(db.Text, default="")
     time = db.Column(db.String(50), default="")  # строка с датой
-    photo = db.Column(db.String(200), default=None)
+    photo = db.Column(db.String(200), default=None)  # если когда-нибудь будем прикреплять фото к комменту
 
 
-# ----------------------------------------------
+#################################################################
 # Вспомогательные функции
-# ----------------------------------------------
-
-def distance_km(lat1, lon1, lat2, lon2):
-    """Расстояние в км между двумя координатами."""
-    R = 6371
-    import math
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = (math.sin(dlat/2)**2 + math.cos(math.radians(lat1))
-         * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2)
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return R * c
-
+#################################################################
 
 def save_file_if_present(field_name):
     """
@@ -154,7 +138,7 @@ def save_file_if_present(field_name):
     file = request.files[field_name]
     if file.filename == '':
         return None
-    # Имя файла делаем уникальным
+    # Генерируем уникальное имя
     ext = os.path.splitext(file.filename)[1]
     new_name = f"{uuid.uuid4()}{ext}"
     path = os.path.join(app.config['UPLOAD_FOLDER'], new_name)
@@ -162,9 +146,9 @@ def save_file_if_present(field_name):
     return new_name
 
 
-# ----------------------------------------------
-# Эндпоинты статического доступа к загруженным файлам
-# ----------------------------------------------
+#################################################################
+# Статическая отдача загруженных файлов (фото, аудио)
+#################################################################
 
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
@@ -172,9 +156,9 @@ def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 
-# ----------------------------------------------
-# Эндпоинты регистрации и логина
-# ----------------------------------------------
+#################################################################
+# Регистрация / Логин
+#################################################################
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -216,9 +200,9 @@ def login():
     return jsonify({"access_token": access_token}), 200
 
 
-# ----------------------------------------------
-# Эндпоинты для работы с геолокациями пользователей
-# ----------------------------------------------
+#################################################################
+# Работа с геолокациями
+#################################################################
 
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
@@ -258,9 +242,9 @@ def get_users():
     return jsonify({"users": resp}), 200
 
 
-# ----------------------------------------------
-# Эндпоинты для групп/чата
-# ----------------------------------------------
+#################################################################
+# Группы / чат
+#################################################################
 
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
@@ -281,7 +265,7 @@ def create_group():
     db.session.add(new_group)
     db.session.commit()
 
-    # Теперь добавим создателя в участники
+    # Добавим создателя в участники
     user = User.query.filter_by(username=current_user).first()
     new_group.members.append(user)
     db.session.commit()
@@ -359,10 +343,10 @@ def get_groups():
 def send_message():
     """
     Принимает форму (multipart/form-data) c полями:
-     - group_id (в form-data)
-     - text (в form-data)
-     - photo (в files) - необязательно
-     - audio (в files) - необязательно
+      - group_id (в form-data)
+      - text (в form-data)
+      - photo (в files) - необязательно
+      - audio (в files) - необязательно
     """
     current_user = get_jwt_identity()
 
@@ -373,7 +357,7 @@ def send_message():
     if not group:
         return jsonify({"error": "No such group"}), 404
 
-    # Проверка, состоит ли user в этой группе (если хотим ограничить)
+    # Проверка, что пользователь состоит в группе
     user = User.query.filter_by(username=current_user).first()
     if user not in group.members:
         return jsonify({"error": "You are not in this group"}), 403
@@ -424,7 +408,7 @@ def get_messages():
         item = {
             "id": m.id,
             "username": m.username,
-            "text": m.text
+            "text": m.text,
         }
         if m.photo:
             item["photo"] = m.photo
@@ -435,22 +419,20 @@ def get_messages():
     return jsonify(resp), 200
 
 
-# ----------------------------------------------
-# Эндпоинты для маршрутов
-# ----------------------------------------------
+#################################################################
+# Маршруты
+#################################################################
 
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
 def upload_route():
     """
-    Принимаем JSON с полями:
+    Принимаем JSON:
     {
       "route_name": "...",
-      "username": "...",
       "distance": float,
-      "route_points": [{"lat":..., "lon":...}, ...],
-      "route_comments": [{"lat":..., "lon":..., "text":"...", "time":"..."}],
-      ...
+      "route_points": [{"lat":..., "lon":...}],
+      "route_comments": [{"lat":..., "lon":..., "text":"...", "time":"..."}]
     }
     Создаём в БД Route, Points, Comments.
     """
@@ -462,7 +444,6 @@ def upload_route():
     route_points = data.get('route_points', [])
     route_comments = data.get('route_comments', [])
 
-    # создаём объект Route
     route_id = str(uuid.uuid4())
     r = Route(
         id=route_id,
@@ -473,7 +454,7 @@ def upload_route():
     db.session.add(r)
     db.session.commit()
 
-    # Запишем точки
+    # Точки
     for p in route_points:
         lat = p.get("lat")
         lon = p.get("lon")
@@ -481,14 +462,19 @@ def upload_route():
             rp = RoutePoint(route_id=route_id, lat=lat, lon=lon)
             db.session.add(rp)
 
-    # Запишем комменты
+    # Комментарии
     for c in route_comments:
         lat = c.get("lat")
         lon = c.get("lon")
         text = c.get("text", "")
         time_str = c.get("time", "")
-        # Если хотим загружать фотки к комментариям, нужно отдельно обрабатывать (как в send_message)
-        rc = RouteComment(route_id=route_id, lat=lat, lon=lon, text=text, time=time_str)
+        rc = RouteComment(
+            route_id=route_id,
+            lat=lat,
+            lon=lon,
+            text=text,
+            time=time_str
+        )
         db.session.add(rc)
 
     db.session.commit()
@@ -499,19 +485,17 @@ def upload_route():
 @jwt_required()
 def get_routes():
     """
-    Можно фильтровать по radius_km=? или без фильтра.
-    Возвращаем [{ name, distance, date, comments=[{text,time,photo},...] }, ...]
-    (date возьмём r.created_at.strftime())
+    Можно фильтровать по ?radius_km=... (не реализовано, при желании дописать).
+    Возвращаем [{"name","distance","date","comments":[...]}]
     """
-    current_user = get_jwt_identity()
+    # current_user = get_jwt_identity()  # если вдруг нужно использовать
 
-    radius_km = request.args.get('radius_km', None, type=float)
-    # Если надо — можно фильтровать маршруты по текущим координатам пользователя
+    # radius_km = request.args.get('radius_km', None, type=float)
+    # ... при желании можно делать фильтрацию ...
 
     routes = Route.query.order_by(Route.created_at.desc()).all()
     resp = []
     for rt in routes:
-        # Собираем комментарии
         comms = RouteComment.query.filter_by(route_id=rt.id).all()
         comm_list = []
         for c in comms:
@@ -536,39 +520,39 @@ def get_routes():
     return jsonify(resp), 200
 
 
-# ----------------------------------------------
-# Эндпоинт SOS
-# ----------------------------------------------
+#################################################################
+# SOS
+#################################################################
 
 @app.route('/sos', methods=['POST'])
 @jwt_required()
 def sos():
     """
-    Принимает: {"lat":..., "lon":...}, берёт username из токена
-    Записывает/логирует «SOS» (дальше логика на ваше усмотрение).
+    Принимает: {"lat":..., "lon":...}, username из токена.
+    Логируем SOS, дальше логика — на ваше усмотрение.
     """
     current_user = get_jwt_identity()
     data = request.get_json() or {}
     lat = data.get('lat')
     lon = data.get('lon')
     logging.warning(f"SOS from {current_user}: lat={lat}, lon={lon}")
-    # Можно сохранять в БД, отправлять пуш-уведомления и т.д.
+    # Здесь можно сохранить в БД или уведомлять...
     return jsonify({"message": "SOS received"}), 200
 
 
-# ----------------------------------------------
-# Запуск/инициализация БД
-# ----------------------------------------------
+#################################################################
+# Инициализация БД (без before_first_request!)
+#################################################################
 
-def init_db():
+# Сразу после создания всего "app" и "db" — создаём таблицы
+with app.app_context():
     db.create_all()
-    # Можно добавить тестовые данные, если нужно
-
-@app.before_first_request
-def before_first_request_func():
-    init_db()
 
 
+#################################################################
+# Запуск (локально)
+#################################################################
 if __name__ == '__main__':
-    # Запуск
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # При локальном запуске (python main.py) поднимаем dev-сервер Flask
+    port = int(os.environ.get('PORT', 5000))
+    app.run(debug=True, host='0.0.0.0', port=port)
