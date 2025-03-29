@@ -1,40 +1,40 @@
 import os
 import uuid
+import math
 import logging
-import json  # <--- добавил
+import json
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 
-# Настройка логирования
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 
-# Создаем приложение Flask
 app = Flask(__name__)
 
-# Конфигурация базы данных
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-db_path = os.path.join(BASE_DIR, 'database.db')
-app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{db_path}"
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db_path = os.path.join(BASE_DIR, "database.db")
+app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
-# Папка для загрузок файлов
-UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
-# Инициализация базы данных и миграций
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
-# ==================== Модели ====================
+# --------------------- Модели ---------------------
 
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
     password = db.Column(db.String(120), nullable=False)
+    # добавили поля для координат
+    lat = db.Column(db.Float, nullable=True)
+    lon = db.Column(db.Float, nullable=True)
+    updated_at = db.Column(db.DateTime, nullable=True)
 
 class Group(db.Model):
     id = db.Column(db.String(36), primary_key=True)
@@ -54,21 +54,21 @@ class Route(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), db.ForeignKey('user.username'), nullable=False)
     route_name = db.Column(db.String(100), nullable=False)
-    route_points = db.Column(db.Text, nullable=False)  # JSON сериализованный список точек
-    route_comments = db.Column(db.Text, nullable=True) # JSON сериализованный список комментариев
+    route_points = db.Column(db.Text, nullable=False)  # JSON
+    route_comments = db.Column(db.Text, nullable=True) # JSON
     is_public = db.Column(db.Boolean, default=True)
-    distance = db.Column(db.Float, default=0)  # в км
-    duration = db.Column(db.Float, default=0)  # в секундах
-    avg_speed = db.Column(db.Float, default=0) # в км/ч
+    distance = db.Column(db.Float, default=0)
+    duration = db.Column(db.Float, default=0)
+    avg_speed = db.Column(db.Float, default=0)
     date = db.Column(db.Date, default=datetime.utcnow().date)
 
-# ==================== Эндпоинты ====================
+# --------------------- Эндпоинты ---------------------
 
-@app.route('/ping', methods=['GET'])
+@app.route("/ping", methods=["GET"])
 def ping():
     return jsonify({"status": "ok"}), 200
 
-@app.route('/login', methods=['POST'])
+@app.route("/login", methods=["POST"])
 def login():
     data = request.get_json()
     username = data.get("username")
@@ -78,7 +78,7 @@ def login():
         return jsonify({"message": "Login successful"}), 200
     return jsonify({"error": "Invalid credentials"}), 401
 
-@app.route('/register', methods=['POST'])
+@app.route("/register", methods=["POST"])
 def register():
     data = request.get_json()
     username = data.get("username")
@@ -92,66 +92,78 @@ def register():
     db.session.commit()
     return jsonify({"message": "Registration successful"}), 200
 
-@app.route('/update_location', methods=['POST'])
+@app.route("/update_location", methods=["POST"])
 def update_location():
     data = request.get_json()
     username = data.get("username")
     lat = data.get("lat")
     lon = data.get("lon")
-    logging.info(f"Location update for {username}: {lat}, {lon}")
+    logging.info(f"Location update for {username}: lat={lat}, lon={lon}")
+
+    user = User.query.filter_by(username=username).first()
+    if user:
+        user.lat = lat
+        user.lon = lon
+        user.updated_at = datetime.utcnow()
+        db.session.commit()
+
     return jsonify({"message": "Location updated"}), 200
 
-# Группы и групповой чат
-@app.route('/create_group', methods=['POST'])
+@app.route("/create_group", methods=["POST"])
 def create_group():
     data = request.get_json()
-    group_name = data.get("name")
-    owner = data.get("owner")
-    if not group_name or not owner:
-        return jsonify({"error": "Group name and owner required"}), 400
     group_id = str(uuid.uuid4())
-    group = Group(id=group_id, name=group_name, owner=owner)
-    db.session.add(group)
+    grp = Group(
+        id=group_id,
+        name=data.get("name"),
+        owner=data.get("owner")
+    )
+    db.session.add(grp)
     db.session.commit()
-    return jsonify({"group_id": group_id, "name": group_name}), 200
+    return jsonify({"group_id": group_id, "name": grp.name}), 200
 
-@app.route('/get_groups', methods=['GET'])
+@app.route("/get_groups", methods=["GET"])
 def get_groups():
-    groups_query = Group.query.all()
-    groups_list = [{"id": g.id, "name": g.name, "owner": g.owner} for g in groups_query]
-    return jsonify(groups_list), 200
+    grps = Group.query.all()
+    result = []
+    for g in grps:
+        result.append({
+            "id": g.id,
+            "name": g.name,
+            "owner": g.owner
+        })
+    return jsonify(result), 200
 
-@app.route('/join_group', methods=['POST'])
+@app.route("/join_group", methods=["POST"])
 def join_group():
     data = request.get_json()
-    username = data.get("username")
     group_id = data.get("group_id")
-    group = Group.query.filter_by(id=group_id).first()
-    if not group:
+    # упрощаем
+    grp = Group.query.filter_by(id=group_id).first()
+    if not grp:
         return jsonify({"error": "Group not found"}), 404
-    # Для простоты, если пользователь уже является владельцем или участником, ничего не делаем.
-    # Реальная реализация может использовать таблицу связей.
     return jsonify({"message": "Joined group"}), 200
 
-@app.route('/delete_group', methods=['POST'])
+@app.route("/delete_group", methods=["POST"])
 def delete_group():
     data = request.get_json()
     group_id = data.get("group_id")
-    group = Group.query.filter_by(id=group_id).first()
-    if group:
-        db.session.delete(group)
-        db.session.commit()
-        return jsonify({"message": "Group deleted"}), 200
-    return jsonify({"error": "Group not found"}), 404
+    grp = Group.query.filter_by(id=group_id).first()
+    if not grp:
+        return jsonify({"error": "Group not found"}), 404
+    db.session.delete(grp)
+    db.session.commit()
+    return jsonify({"message": "Group deleted"}), 200
 
-@app.route('/send_message', methods=['POST'])
+@app.route("/send_message", methods=["POST"])
 def send_message():
     username = request.form.get("username")
     group_id = request.form.get("group_id")
     text = request.form.get("text", "")
     audio = request.files.get("audio")
     photo = request.files.get("photo")
-    message = GroupMessage(
+
+    msg = GroupMessage(
         group_id=group_id,
         username=username,
         text=text,
@@ -161,81 +173,117 @@ def send_message():
         audio_filename = f"audio_{uuid.uuid4().hex}.dat"
         audio_path = os.path.join(app.config['UPLOAD_FOLDER'], audio_filename)
         audio.save(audio_path)
-        message.audio_filename = audio_filename
+        msg.audio_filename = audio_filename
+
     if photo:
         photo_filename = f"photo_{uuid.uuid4().hex}.jpg"
         photo_path = os.path.join(app.config['UPLOAD_FOLDER'], photo_filename)
         photo.save(photo_path)
-        message.photo_filename = photo_filename
-    db.session.add(message)
-    db.session.commit()
-    return jsonify({"message": "Message sent", "id": message.id}), 200
+        msg.photo_filename = photo_filename
 
-@app.route('/get_messages', methods=['GET'])
+    db.session.add(msg)
+    db.session.commit()
+    return jsonify({"message": "Message sent", "id": msg.id}), 200
+
+@app.route("/get_messages", methods=["GET"])
 def get_messages():
     group_id = request.args.get("group_id")
     after_id = int(request.args.get("after_id", 0))
-    messages = GroupMessage.query.filter(GroupMessage.group_id==group_id, GroupMessage.id > after_id).all()
-    msgs = []
-    for m in messages:
-        msg = {
+    msgs = GroupMessage.query.filter(GroupMessage.group_id==group_id, GroupMessage.id>after_id).all()
+    result=[]
+    for m in msgs:
+        item={
             "id": m.id,
             "username": m.username,
             "text": m.text,
             "timestamp": m.timestamp.strftime("%Y-%m-%d %H:%M:%S")
         }
         if m.audio_filename:
-            msg["audio"] = m.audio_filename
+            item["audio"] = m.audio_filename
         if m.photo_filename:
-            msg["photo"] = m.photo_filename
-        msgs.append(msg)
-    return jsonify(msgs), 200
+            item["photo"] = m.photo_filename
+        result.append(item)
+    return jsonify(result), 200
 
-# Маршруты
-@app.route('/upload_route', methods=['POST'])
+# ----------------- новый эндпоинт ----------------
+@app.route("/get_users_in_radius", methods=["GET"])
+def get_users_in_radius():
+    lat_str = request.args.get("lat", "0")
+    lon_str = request.args.get("lon", "0")
+    rad_str = request.args.get("radius_km", "10")
+    try:
+        lat0 = float(lat_str)
+        lon0 = float(lon_str)
+        radius_km = float(rad_str)
+    except:
+        return jsonify([]), 200
+
+    users = User.query.all()
+    out=[]
+    for u in users:
+        if u.lat is not None and u.lon is not None:
+            dist = distance_km(lat0, lon0, u.lat, u.lon)
+            if dist<=radius_km:
+                out.append({
+                    "username": u.username,
+                    "lat": u.lat,
+                    "lon": u.lon,
+                    "dist_km": round(dist,2)
+                })
+    return jsonify(out), 200
+
+def distance_km(lat1, lon1, lat2, lon2):
+    R=6371
+    dlat=math.radians(lat2-lat1)
+    dlon=math.radians(lon2-lon1)
+    a=math.sin(dlat/2)**2 + math.cos(math.radians(lat1))*math.cos(math.radians(lat2))*math.sin(dlon/2)**2
+    c=2*math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R*c
+
+
+@app.route("/upload_route", methods=["POST"])
 def upload_route():
     data = request.get_json()
     if not data:
         return jsonify({"error": "No route data provided"}), 400
-    # Ожидаем, что data содержит: route_name, route_points (JSON), route_comments (JSON), is_public, distance, duration, avg_speed
-    data["date"] = datetime.now().strftime("%Y-%m-%d")
     route = Route(
-        username=data.get("username", "unknown"),
-        route_name=data.get("route_name", "Unnamed Route"),
-        route_points=json.dumps(data.get("route_points", []), ensure_ascii=False),  # <--- ensure_ascii=False
-        route_comments=json.dumps(data.get("route_comments", []), ensure_ascii=False),
-        is_public=data.get("is_public", True),
-        distance=data.get("distance", 0),
-        duration=data.get("duration", 0),
-        avg_speed=data.get("avg_speed", 0),
+        username=data.get("username","unknown"),
+        route_name=data.get("route_name","Unnamed Route"),
+        route_points=json.dumps(data.get("route_points",[]), ensure_ascii=False),
+        route_comments=json.dumps(data.get("route_comments",[]), ensure_ascii=False),
+        is_public=data.get("is_public",True),
+        distance=data.get("distance",0),
+        duration=data.get("duration",0),
+        avg_speed=data.get("avg_speed",0),
         date=datetime.utcnow().date()
     )
     db.session.add(route)
     db.session.commit()
     return jsonify({"message": "Route uploaded"}), 200
 
-@app.route('/get_routes', methods=['GET'])
+@app.route("/get_routes", methods=["GET"])
 def get_routes():
-    routes_query = Route.query.all()
-    routes_list = []
-    for r in routes_query:
-        routes_list.append({
+    # Для примера без фильтра
+    all_r = Route.query.all()
+    out=[]
+    for r in all_r:
+        out.append({
             "id": r.id,
             "username": r.username,
             "name": r.route_name,
             "route_points": json.loads(r.route_points),
-            "route_comments": json.loads(r.route_comments) if r.route_comments else [],
+            "route_comments": json.loads(r.route_comments or "[]"),
             "is_public": r.is_public,
             "distance": r.distance,
             "duration": r.duration,
             "avg_speed": r.avg_speed,
             "date": r.date.strftime("%Y-%m-%d")
         })
-    return jsonify(routes_list), 200
+    return jsonify(out), 200
 
-@app.route('/uploads/<filename>', methods=['GET'])
+@app.route("/uploads/<filename>")
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-if __name__ == "__main__":
+if __name__=="__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
