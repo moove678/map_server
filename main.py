@@ -9,47 +9,32 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# JWT авторизация
 from flask_jwt_extended import (
     JWTManager, create_access_token,
     jwt_required, get_jwt_identity
 )
 
-# ----------------------------------------------
-# Конфигурация приложения
-# ----------------------------------------------
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'very-secret-flask-key'
-app.config['JWT_SECRET_KEY'] = 'very-secret-jwt-key'  # Секрет для JWT
-
-# Путь к базе SQLite
+app.config['JWT_SECRET_KEY'] = 'very-secret-jwt-key'
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.sqlite'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-
-# Чтобы JSON не «ломал» кириллицу
 app.config['JSON_AS_ASCII'] = False
-
-# Папка для сохранения загруженных файлов
 app.config['UPLOAD_FOLDER'] = 'uploads'
+
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
-
 logging.basicConfig(level=logging.DEBUG)
 
-
-# ----------------------------------------------
-# Модели (SQLAlchemy)
-# ----------------------------------------------
+# ------------------------------------------------
+# Модели
+# ------------------------------------------------
 class User(db.Model):
-    """
-    Таблица users:
-      username (PK), password(хеш), lat, lon
-    """
     __tablename__ = 'user'
     username = db.Column(db.String(80), primary_key=True)
-    password = db.Column(db.String(200), nullable=False)  # Храним хэш
+    password = db.Column(db.String(200), nullable=False)  # хэш
     lat = db.Column(db.Float, default=0.0)
     lon = db.Column(db.Float, default=0.0)
 
@@ -60,7 +45,6 @@ class User(db.Model):
             "lon": self.lon
         }
 
-# Многие-ко-многим связь Group <-> User
 GroupMembers = db.Table(
     'group_members',
     db.Column('group_id', db.String(36), db.ForeignKey('group.id'), primary_key=True),
@@ -68,14 +52,11 @@ GroupMembers = db.Table(
 )
 
 class Group(db.Model):
-    """
-    Таблица groups (чаты).
-    id (uuid), name, owner, members (many-to-many).
-    """
     __tablename__ = 'group'
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
     owner = db.Column(db.String(80))  # username
+
     members = db.relationship("User", secondary=GroupMembers, backref="groups")
 
     def to_json(self):
@@ -86,10 +67,6 @@ class Group(db.Model):
         }
 
 class Message(db.Model):
-    """
-    Сообщения в чате.
-    В group_id, от username, text, opt audio/photo, created_at.
-    """
     __tablename__ = 'message'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     group_id = db.Column(db.String(36), db.ForeignKey('group.id'))
@@ -99,12 +76,7 @@ class Message(db.Model):
     photo = db.Column(db.String(200), default=None)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-
 class Route(db.Model):
-    """
-    Таблица routes:
-      id (uuid), name, username(owner), distance, created_at
-    """
     __tablename__ = 'route'
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
@@ -113,9 +85,6 @@ class Route(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class RoutePoint(db.Model):
-    """
-    route_points: lat, lon, route_id
-    """
     __tablename__ = 'route_point'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
@@ -123,9 +92,6 @@ class RoutePoint(db.Model):
     lon = db.Column(db.Float)
 
 class RouteComment(db.Model):
-    """
-    Комментарии к маршруту.
-    """
     __tablename__ = 'route_comment'
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
@@ -133,16 +99,12 @@ class RouteComment(db.Model):
     lon = db.Column(db.Float)
     text = db.Column(db.Text, default="")
     time = db.Column(db.String(50), default="")
-    photo = db.Column(db.String(200), default=None)  # Если нужны фото
-# ----------------------------------------------
-# Вспомогательные функции
-# ----------------------------------------------
+    photo = db.Column(db.String(200), default=None)
+
+# ------------------------------------------------
+# Служебная функция сохранения файлов
+# ------------------------------------------------
 def save_file_if_present(field_name):
-    """
-    Если в request.files[field_name] пришёл файл,
-    сохраняем в UPLOAD_FOLDER и возвращаем имя файла.
-    Иначе None.
-    """
     if field_name not in request.files:
         return None
     f = request.files[field_name]
@@ -154,17 +116,13 @@ def save_file_if_present(field_name):
     f.save(path)
     return new_name
 
-# ----------------------------------------------
-# Служебный эндпоинт для выдачи загруженных файлов
-# ----------------------------------------------
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-
-# ----------------------------------------------
-# Регистрация и логин
-# ----------------------------------------------
+# ------------------------------------------------
+# Регистрация / Логин
+# ------------------------------------------------
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json() or {}
@@ -173,7 +131,6 @@ def register():
     if not username or not password:
         return jsonify({"error": "Username/password required"}), 400
 
-    # Проверим, нет ли уже такого пользователя
     if User.query.filter_by(username=username).first():
         return jsonify({"error": "User already exists"}), 400
 
@@ -181,9 +138,7 @@ def register():
     user = User(username=username, password=hashed_pw)
     db.session.add(user)
     db.session.commit()
-
     return jsonify({"message": "Registration success"}), 200
-
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -194,18 +149,15 @@ def login():
         return jsonify({"error": "No user/pass"}), 400
 
     user = User.query.filter_by(username=username).first()
-    if not user:
-        return jsonify({"error": "Invalid username or password"}), 401
-
-    if not check_password_hash(user.password, password):
+    if not user or not check_password_hash(user.password, password):
         return jsonify({"error": "Invalid username or password"}), 401
 
     access_token = create_access_token(identity=username)
     return jsonify({"access_token": access_token}), 200
 
-# ----------------------------------------------
-# update_location, get_users
-# ----------------------------------------------
+# ------------------------------------------------
+# update_location / get_users
+# ------------------------------------------------
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
 def update_location():
@@ -223,9 +175,7 @@ def update_location():
     u.lat = float(lat)
     u.lon = float(lon)
     db.session.commit()
-
     return jsonify({"status": "ok"}), 200
-
 
 @app.route('/get_users', methods=['GET'])
 @jwt_required()
@@ -234,9 +184,9 @@ def get_users():
     resp = [u.to_json() for u in users]
     return jsonify({"users": resp}), 200
 
-# ----------------------------------------------
+# ------------------------------------------------
 # Группы и чат
-# ----------------------------------------------
+# ------------------------------------------------
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
 def create_group():
@@ -251,13 +201,11 @@ def create_group():
     db.session.add(g)
     db.session.commit()
 
-    # Добавляем создателя в участники
     user = User.query.filter_by(username=current_user).first()
     g.members.append(user)
     db.session.commit()
 
     return jsonify({"group_id": group_id}), 200
-
 
 @app.route('/join_group', methods=['POST'])
 @jwt_required()
@@ -276,7 +224,6 @@ def join_group():
     g.members.append(user)
     db.session.commit()
     return jsonify({"message": "Joined group"}), 200
-
 
 @app.route('/leave_group', methods=['POST'])
 @jwt_required()
@@ -330,7 +277,6 @@ def send_message():
     )
     db.session.add(msg)
     db.session.commit()
-
     return jsonify({"message":"ok"}),200
 
 @app.route('/get_messages', methods=['GET'])
@@ -368,9 +314,9 @@ def get_messages():
 
     return jsonify(resp),200
 
-# ----------------------------------------------
+# ------------------------------------------------
 # Маршруты
-# ----------------------------------------------
+# ------------------------------------------------
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
 def upload_route():
@@ -392,7 +338,6 @@ def upload_route():
     db.session.add(r)
     db.session.commit()
 
-    # Точки
     for p in route_points:
         lat = p.get("lat")
         lon = p.get("lon")
@@ -400,7 +345,6 @@ def upload_route():
             rp = RoutePoint(route_id=route_id, lat=lat, lon=lon)
             db.session.add(rp)
 
-    # Комментарии
     for c in route_comments:
         lat = c.get("lat")
         lon = c.get("lon")
@@ -408,7 +352,8 @@ def upload_route():
         time_str = c.get("time","")
         rc = RouteComment(
             route_id=route_id,
-            lat=lat, lon=lon,
+            lat=lat,
+            lon=lon,
             text=text,
             time=time_str
         )
@@ -420,8 +365,6 @@ def upload_route():
 @app.route('/get_routes', methods=['GET'])
 @jwt_required()
 def get_routes():
-    # Можно опционально фильтровать по radius_km
-    # но для примера просто возвращаем все
     routes = Route.query.order_by(Route.created_at.desc()).all()
     resp = []
     for rt in routes:
@@ -448,9 +391,9 @@ def get_routes():
 
     return jsonify(resp), 200
 
-# ----------------------------------------------
+# ------------------------------------------------
 # SOS
-# ----------------------------------------------
+# ------------------------------------------------
 @app.route('/sos', methods=['POST'])
 @jwt_required()
 def sos():
@@ -458,14 +401,12 @@ def sos():
     data = request.get_json() or {}
     lat = data.get('lat')
     lon = data.get('lon')
-
     logging.warning(f"SOS from {current_user}: lat={lat}, lon={lon}")
-    # Можно сохранять в БД, отправлять уведомления и т.д.
     return jsonify({"message":"SOS received"}),200
 
-# ----------------------------------------------
+# ------------------------------------------------
 # Инициализация БД
-# ----------------------------------------------
+# ------------------------------------------------
 def init_db():
     db.create_all()
 
@@ -473,8 +414,8 @@ def init_db():
 def before_first_request_func():
     init_db()
 
-# ----------------------------------------------
-# Запуск
-# ----------------------------------------------
+# ------------------------------------------------
+# Запуск локально
+# ------------------------------------------------
 if __name__=="__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
