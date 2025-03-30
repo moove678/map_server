@@ -42,6 +42,7 @@ class User(db.Model):
             "lon": self.lon
         }
 
+# Многие-ко-многим: группы и пользователи
 GroupMembers = db.Table(
     'group_members',
     db.Column('group_id', db.String(36), db.ForeignKey('group.id'), primary_key=True),
@@ -101,9 +102,7 @@ class RouteComment(db.Model):
 # ------------------ Вспомогательные функции ------------------
 
 def save_file_if_present(field_name):
-    """
-    Если файл присутствует в запросе, сохраняет его в UPLOAD_FOLDER и возвращает имя файла.
-    """
+    """Если файл присутствует в запросе, сохраняем его в UPLOAD_FOLDER и возвращаем имя файла."""
     if field_name not in request.files:
         return None
     f = request.files[field_name]
@@ -325,7 +324,7 @@ def upload_route():
     route_name = data.get('route_name', 'Unnamed')
     try:
         distance = float(data.get('distance', 0.0))
-    except (ValueError, TypeError):
+    except ValueError:
         distance = 0.0
     route_points = data.get('route_points', [])
     route_comments = data.get('route_comments', [])
@@ -340,6 +339,7 @@ def upload_route():
     db.session.add(r)
     db.session.commit()
 
+    # Добавление точек маршрута
     for p in route_points:
         lat = p.get("lat")
         lon = p.get("lon")
@@ -347,6 +347,7 @@ def upload_route():
             rp = RoutePoint(route_id=route_id, lat=lat, lon=lon)
             db.session.add(rp)
 
+    # Добавление комментариев к маршруту
     for c in route_comments:
         lat = c.get("lat")
         lon = c.get("lon")
@@ -368,6 +369,7 @@ def upload_route():
 @app.route('/get_routes', methods=['GET'])
 @jwt_required()
 def get_routes():
+    # Для примера возвращаем все маршруты, можно добавить фильтрацию по ?radius_km=...
     routes = Route.query.order_by(Route.created_at.desc()).all()
     resp = []
     for rt in routes:
@@ -401,6 +403,7 @@ def sos():
     lat = data.get('lat')
     lon = data.get('lon')
     logging.warning(f"SOS from {current_user}: lat={lat}, lon={lon}")
+    # Можно сохранить SOS в БД или отправить уведомление
     return jsonify({"message": "SOS received"}), 200
 
 # ------------------ Инициализация БД ------------------
@@ -410,6 +413,7 @@ def init_db():
 
 # ------------------ Запуск приложения ------------------
 if __name__ == "__main__":
+    # Инициализируем БД в контексте приложения
     with app.app_context():
         init_db()
     app.run(debug=True, host="0.0.0.0", port=5000)
