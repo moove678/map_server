@@ -54,6 +54,4 @@ uvicorn==0.34.0
 waitress==3.0.2
 websockets==15.0.1
 Werkzeug==2.2.3
-Flask_Migrate
-gunicorn==20.1.0
 flask_jwt_extended==4.4.4
