@@ -102,7 +102,7 @@ class RouteComment(db.Model):
 # ------------------ Вспомогательные функции ------------------
 
 def save_file_if_present(field_name):
-    """Если файл присутствует в запросе, сохраняем его в UPLOAD_FOLDER и возвращаем имя файла."""
+    """Если файл присутствует в запросе, сохраняет его в UPLOAD_FOLDER и возвращает имя файла."""
     if field_name not in request.files:
         return None
     f = request.files[field_name]
@@ -324,7 +324,7 @@ def upload_route():
     route_name = data.get('route_name', 'Unnamed')
     try:
         distance = float(data.get('distance', 0.0))
-    except ValueError:
+    except (ValueError, TypeError):
         distance = 0.0
     route_points = data.get('route_points', [])
     route_comments = data.get('route_comments', [])
@@ -403,7 +403,6 @@ def sos():
     lat = data.get('lat')
     lon = data.get('lon')
     logging.warning(f"SOS from {current_user}: lat={lat}, lon={lon}")
-    # Можно сохранить SOS в БД или отправить уведомление
     return jsonify({"message": "SOS received"}), 200
 
 # ------------------ Инициализация БД ------------------
@@ -413,7 +412,6 @@ def init_db():
 
 # ------------------ Запуск приложения ------------------
 if __name__ == "__main__":
-    # Инициализируем БД в контексте приложения
     with app.app_context():
         init_db()
     app.run(debug=True, host="0.0.0.0", port=5000)
