@@ -42,7 +42,6 @@ class User(db.Model):
             "lon": self.lon
         }
 
-# Многие-ко-многим: группы и пользователи
 GroupMembers = db.Table(
     'group_members',
     db.Column('group_id', db.String(36), db.ForeignKey('group.id'), primary_key=True),
@@ -102,7 +101,9 @@ class RouteComment(db.Model):
 # ------------------ Вспомогательные функции ------------------
 
 def save_file_if_present(field_name):
-    """Если файл присутствует в запросе, сохраняет его в UPLOAD_FOLDER и возвращает имя файла."""
+    """
+    Если файл присутствует в запросе, сохраняет его в UPLOAD_FOLDER и возвращает имя файла.
+    """
     if field_name not in request.files:
         return None
     f = request.files[field_name]
@@ -339,7 +340,6 @@ def upload_route():
     db.session.add(r)
     db.session.commit()
 
-    # Добавление точек маршрута
     for p in route_points:
         lat = p.get("lat")
         lon = p.get("lon")
@@ -347,7 +347,6 @@ def upload_route():
             rp = RoutePoint(route_id=route_id, lat=lat, lon=lon)
             db.session.add(rp)
 
-    # Добавление комментариев к маршруту
     for c in route_comments:
         lat = c.get("lat")
         lon = c.get("lon")
@@ -369,7 +368,6 @@ def upload_route():
 @app.route('/get_routes', methods=['GET'])
 @jwt_required()
 def get_routes():
-    # Для примера возвращаем все маршруты, можно добавить фильтрацию по ?radius_km=...
     routes = Route.query.order_by(Route.created_at.desc()).all()
     resp = []
     for rt in routes:
