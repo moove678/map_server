@@ -1,8 +1,8 @@
 import os
 import uuid
 import logging
+import base64
 from datetime import datetime
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -27,7 +27,6 @@ jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
 # ------------------ Модели ------------------
-
 class User(db.Model):
     __tablename__ = 'user'
     username = db.Column(db.String(80), primary_key=True)
@@ -42,7 +41,6 @@ class User(db.Model):
             "lon": self.lon
         }
 
-# Многие-ко-многим: группы и пользователи
 GroupMembers = db.Table(
     'group_members',
     db.Column('group_id', db.String(36), db.ForeignKey('group.id'), primary_key=True),
@@ -54,7 +52,6 @@ class Group(db.Model):
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
     owner = db.Column(db.String(80))  # username владельца
-
     members = db.relationship("User", secondary=GroupMembers, backref="groups")
 
     def to_json(self):
@@ -100,9 +97,7 @@ class RouteComment(db.Model):
     photo = db.Column(db.String(200), default=None)
 
 # ------------------ Вспомогательные функции ------------------
-
 def save_file_if_present(field_name):
-    """Если файл присутствует в запросе, сохраняем его в UPLOAD_FOLDER и возвращаем имя файла."""
     if field_name not in request.files:
         return None
     f = request.files[field_name]
@@ -114,13 +109,31 @@ def save_file_if_present(field_name):
     f.save(path)
     return new_name
 
+def save_file_from_base64(data, extension):
+    """
+    Декодирует base64‑строку и сохраняет файл с заданным расширением.
+    Возвращает новое имя файла или None при ошибке.
+    """
+    try:
+        decoded = base64.b64decode(data)
+    except Exception as e:
+        logging.error(f"Ошибка декодирования base64: {e}")
+        return None
+    new_name = f"{uuid.uuid4()}.{extension}"
+    path = os.path.join(app.config['UPLOAD_FOLDER'], new_name)
+    try:
+        with open(path, "wb") as f:
+            f.write(decoded)
+    except Exception as e:
+        logging.error(f"Ошибка записи файла: {e}")
+        return None
+    return new_name
+
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # ------------------ Эндпоинты ------------------
-
-# Регистрация
 @app.route('/register', methods=['POST'])
 def register():
     data = request.get_json() or {}
@@ -138,7 +151,6 @@ def register():
     db.session.commit()
     return jsonify({"message": "Registration success"}), 200
 
-# Логин
 @app.route('/login', methods=['POST'])
 def login():
     data = request.get_json() or {}
@@ -154,7 +166,6 @@ def login():
     access_token = create_access_token(identity=username)
     return jsonify({"access_token": access_token}), 200
 
-# Обновление местоположения
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
 def update_location():
@@ -174,7 +185,6 @@ def update_location():
     db.session.commit()
     return jsonify({"status": "ok"}), 200
 
-# Получение списка пользователей
 @app.route('/get_users', methods=['GET'])
 @jwt_required()
 def get_users():
@@ -182,7 +192,6 @@ def get_users():
     resp = [u.to_json() for u in users]
     return jsonify({"users": resp}), 200
 
-# Создание группы
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
 def create_group():
@@ -203,7 +212,6 @@ def create_group():
 
     return jsonify({"group_id": group_id}), 200
 
-# Присоединение к группе
 @app.route('/join_group', methods=['POST'])
 @jwt_required()
 def join_group():
@@ -222,7 +230,6 @@ def join_group():
     db.session.commit()
     return jsonify({"message": "Joined group"}), 200
 
-# Выход из группы
 @app.route('/leave_group', methods=['POST'])
 @jwt_required()
 def leave_group():
@@ -237,11 +244,18 @@ def leave_group():
     if user not in g.members:
         return jsonify({"error": "Not in group"}), 400
 
+    # Удаляем пользователя из группы
     g.members.remove(user)
     db.session.commit()
+
+    # Если в группе никого не осталось, удаляем группу
+    if len(g.members) == 0:
+        db.session.delete(g)
+        db.session.commit()
+        return jsonify({"message": "Left group. Group deleted (no members left)"}), 200
+
     return jsonify({"message": "Left group"}), 200
 
-# Получение списка групп
 @app.route('/get_groups', methods=['GET'])
 @jwt_required()
 def get_groups():
@@ -249,13 +263,18 @@ def get_groups():
     data = [g.to_json() for g in groups]
     return jsonify(data), 200
 
-# Отправка сообщения в группе
 @app.route('/send_message', methods=['POST'])
 @jwt_required()
 def send_message():
     current_user = get_jwt_identity()
+    # Сначала пытаемся получить данные из формы
     group_id = request.form.get('group_id')
     text = request.form.get('text', '')
+    # Если данные не в форме, пробуем JSON
+    if not group_id:
+        data = request.get_json() or {}
+        group_id = data.get('group_id')
+        text = data.get('text', '')
 
     g = Group.query.filter_by(id=group_id).first()
     if not g:
@@ -265,8 +284,26 @@ def send_message():
     if user not in g.members:
         return jsonify({"error": "User not in group"}), 403
 
-    photo_name = save_file_if_present('photo')
-    audio_name = save_file_if_present('audio')
+    photo_name = None
+    audio_name = None
+
+    # Если файл передан через request.files, используем его
+    if 'photo' in request.files:
+        photo_name = save_file_if_present('photo')
+    # Если в JSON передан base64 для фото
+    elif request.is_json:
+        data = request.get_json() or {}
+        if 'photo' in data:
+            photo_data = data['photo']
+            photo_name = save_file_from_base64(photo_data, "jpg")
+
+    if 'audio' in request.files:
+        audio_name = save_file_if_present('audio')
+    elif request.is_json:
+        data = request.get_json() or {}
+        if 'audio' in data:
+            audio_data = data['audio']
+            audio_name = save_file_from_base64(audio_data, "wav")
 
     msg = Message(
         group_id=group_id,
@@ -279,14 +316,12 @@ def send_message():
     db.session.commit()
     return jsonify({"message": "ok"}), 200
 
-# Получение сообщений чата
 @app.route('/get_messages', methods=['GET'])
 @jwt_required()
 def get_messages():
     current_user = get_jwt_identity()
     group_id = request.args.get('group_id')
     after_id = request.args.get('after_id', 0, type=int)
-
     g = Group.query.filter_by(id=group_id).first()
     if not g:
         return jsonify([]), 200
@@ -314,7 +349,6 @@ def get_messages():
         resp.append(item)
     return jsonify(resp), 200
 
-# Загрузка маршрута
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
 def upload_route():
@@ -324,7 +358,7 @@ def upload_route():
     route_name = data.get('route_name', 'Unnamed')
     try:
         distance = float(data.get('distance', 0.0))
-    except ValueError:
+    except (ValueError, TypeError):
         distance = 0.0
     route_points = data.get('route_points', [])
     route_comments = data.get('route_comments', [])
@@ -339,15 +373,12 @@ def upload_route():
     db.session.add(r)
     db.session.commit()
 
-    # Добавление точек маршрута
     for p in route_points:
         lat = p.get("lat")
         lon = p.get("lon")
         if lat is not None and lon is not None:
             rp = RoutePoint(route_id=route_id, lat=lat, lon=lon)
             db.session.add(rp)
-
-    # Добавление комментариев к маршруту
     for c in route_comments:
         lat = c.get("lat")
         lon = c.get("lon")
@@ -361,15 +392,12 @@ def upload_route():
             time=time_str
         )
         db.session.add(rc)
-
     db.session.commit()
     return jsonify({"message": "route uploaded"}), 200
 
-# Получение маршрутов
 @app.route('/get_routes', methods=['GET'])
 @jwt_required()
 def get_routes():
-    # Для примера возвращаем все маршруты, можно добавить фильтрацию по ?radius_km=...
     routes = Route.query.order_by(Route.created_at.desc()).all()
     resp = []
     for rt in routes:
@@ -394,7 +422,6 @@ def get_routes():
         resp.append(item)
     return jsonify(resp), 200
 
-# SOS-эндпоинт
 @app.route('/sos', methods=['POST'])
 @jwt_required()
 def sos():
@@ -403,16 +430,12 @@ def sos():
     lat = data.get('lat')
     lon = data.get('lon')
     logging.warning(f"SOS from {current_user}: lat={lat}, lon={lon}")
-    # Можно сохранить SOS в БД или отправить уведомление
     return jsonify({"message": "SOS received"}), 200
 
 # ------------------ Инициализация БД ------------------
-
-def init_db():
+@app.before_first_request
+def initialize_database():
     db.create_all()
-# ------------------ Запуск приложения ------------------
+
 if __name__ == "__main__":
-    # Инициализируем БД в контексте приложения
-    with app.app_context():
-        init_db()
     app.run(debug=True, host="0.0.0.0", port=5000)
