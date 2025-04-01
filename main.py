@@ -3,7 +3,6 @@ import uuid
 import logging
 import base64
 from datetime import datetime
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -19,14 +18,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.sqlite'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
-
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
-# ------------------ Модели ------------------
+# --- Модели ---
 
 ignored_users = db.Table('ignored_users',
     db.Column('user', db.String(80), db.ForeignKey('user.username')),
@@ -44,7 +42,6 @@ class User(db.Model):
         secondaryjoin=username == ignored_users.c.ignored,
         backref='ignored_by'
     )
-
     def to_json(self):
         return {"username": self.username, "lat": self.lat, "lon": self.lon}
 
@@ -58,7 +55,6 @@ class Group(db.Model):
     name = db.Column(db.String(120))
     owner = db.Column(db.String(80))
     members = db.relationship("User", secondary=group_members, backref="groups")
-
     def to_json(self):
         return {"id": self.id, "name": self.name, "owner": self.owner}
 
@@ -94,7 +90,7 @@ class RouteComment(db.Model):
     time = db.Column(db.String(50))
     photo = db.Column(db.String(200))
 
-# ------------------ Вспомогательные ------------------
+# --- Вспомогательные ---
 
 def save_file(field):
     if field not in request.files:
@@ -122,7 +118,7 @@ def save_base64(data, ext):
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-# ------------------ Аутентификация ------------------
+# --- Аутентификация ---
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -144,7 +140,7 @@ def login():
     token = create_access_token(identity=user.username)
     return jsonify({"access_token": token}), 200
 
-# ------------------ Пользователи ------------------
+# --- Пользователи ---
 
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
@@ -164,7 +160,7 @@ def get_users():
     all_users = User.query.all()
     return jsonify([u.to_json() for u in all_users if u.username not in [i.username for i in user.ignored]])
 
-# ------------------ Игнор ------------------
+# --- Игнор ---
 
 @app.route('/ignore_user', methods=['POST'])
 @jwt_required()
@@ -177,7 +173,7 @@ def ignore_user():
         db.session.commit()
     return jsonify({"ignored": target})
 
-# ------------------ Группы ------------------
+# --- Группы ---
 
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
@@ -215,7 +211,20 @@ def leave_group():
         db.session.commit()
     return jsonify({"status": "left"})
 
-# ------------------ Сообщения ------------------
+@app.route('/get_groups', methods=['GET'])
+@jwt_required()
+def get_groups():
+    current_user = get_jwt_identity()
+    user = User.query.get(current_user)
+    groups = user.groups
+    return jsonify([{
+        "id": g.id,
+        "name": g.name,
+        "owner": g.owner,
+        "members": [m.username for m in g.members]
+    } for g in groups])
+
+# --- Сообщения ---
 
 @app.route('/send_message', methods=['POST'])
 @jwt_required()
@@ -239,7 +248,6 @@ def get_messages():
     group_id = request.args.get('group_id')
     receiver = request.args.get('receiver')
     after_id = int(request.args.get('after_id', 0))
-
     q = Message.query.filter(Message.id > after_id)
     if group_id:
         q = q.filter_by(group_id=group_id)
@@ -250,16 +258,13 @@ def get_messages():
         ).filter(Message.group_id == None)
     else:
         return jsonify([])
-
     messages = q.order_by(Message.id).all()
-    return jsonify([
-        {
-            "id": m.id, "from": m.sender, "to": m.receiver,
-            "text": m.text, "photo": m.photo, "audio": m.audio
-        } for m in messages
-    ])
+    return jsonify([{
+        "id": m.id, "from": m.sender, "to": m.receiver,
+        "text": m.text, "photo": m.photo, "audio": m.audio
+    } for m in messages])
 
-# ------------------ Маршруты ------------------
+# --- Маршруты ---
 
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
@@ -290,7 +295,8 @@ def get_routes():
     for r in routes:
         comments = RouteComment.query.filter_by(route_id=r.id).all()
         resp.append({
-            "name": r.name, "distance": r.distance,
+            "name": r.name,
+            "distance": r.distance,
             "date": r.created_at.strftime("%Y-%m-%d %H:%M"),
             "comments": [{
                 "lat": c.lat, "lon": c.lon,
@@ -300,7 +306,7 @@ def get_routes():
         })
     return jsonify(resp)
 
-# ------------------ SOS ------------------
+# --- SOS ---
 
 @app.route('/sos', methods=['POST'])
 @jwt_required()
@@ -310,7 +316,7 @@ def sos():
     logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
     return jsonify({"message": "SOS received"})
 
-# ------------------ Инициализация ------------------
+# --- Инициализация ---
 
 @app.before_first_request
 def setup():
