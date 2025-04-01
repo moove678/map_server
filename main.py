@@ -3,14 +3,10 @@ import uuid
 import logging
 import base64
 from datetime import datetime
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import (
-    JWTManager, create_access_token,
-    jwt_required, get_jwt_identity
-)
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'very-secret-flask-key'
@@ -19,14 +15,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.sqlite'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
-
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
 # ---------- MODELS ----------
-
 ignored_users = db.Table('ignored_users',
     db.Column('user', db.String(80), db.ForeignKey('user.username')),
     db.Column('ignored', db.String(80), db.ForeignKey('user.username'))
@@ -102,7 +97,6 @@ class RouteComment(db.Model):
     photo = db.Column(db.String(200))
 
 # ---------- HELPERS ----------
-
 def save_file(field):
     if field not in request.files:
         return None
@@ -130,7 +124,6 @@ def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # ---------- AUTH ----------
-
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -152,7 +145,6 @@ def login():
     return jsonify({"access_token": token}), 200
 
 # ---------- USERS ----------
-
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
 def update_location():
@@ -183,18 +175,23 @@ def ignore_user():
     return jsonify({"ignored": target})
 
 # ---------- GROUPS ----------
-
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
 def create_group():
-    current = get_jwt_identity()
-    name = request.json.get('name')
-    gid = str(uuid.uuid4())
-    g = Group(id=gid, name=name, owner=current)
-    g.members.append(User.query.get(current))
-    db.session.add(g)
-    db.session.commit()
-    return jsonify({"group_id": gid})
+    try:
+        current = get_jwt_identity()
+        name = request.json.get('name')
+        if not name:
+            return jsonify({"error": "No name"}), 400
+        gid = str(uuid.uuid4())
+        g = Group(id=gid, name=name, owner=current)
+        db.session.add(g)
+        g.members.append(User.query.get(current))
+        db.session.commit()
+        return jsonify({"group_id": gid})
+    except Exception as e:
+        logging.exception("Ошибка создания группы")
+        return jsonify({"error": "create_group_failed"}), 500
 
 @app.route('/join_group', methods=['POST'])
 @jwt_required()
@@ -223,8 +220,12 @@ def leave_group():
 @app.route('/get_groups', methods=['GET'])
 @jwt_required()
 def get_groups():
-    user = User.query.get(get_jwt_identity())
-    return jsonify([g.to_json() for g in user.groups])
+    try:
+        user = User.query.get(get_jwt_identity())
+        return jsonify([g.to_json() for g in user.groups])
+    except Exception as e:
+        logging.exception("Ошибка при получении групп")
+        return jsonify({"error": "internal"}), 500
 
 @app.route('/rename_group', methods=['POST'])
 @jwt_required()
@@ -250,7 +251,6 @@ def set_group_avatar():
     return jsonify({"status": "avatar_updated"})
 
 # ---------- MESSAGES ----------
-
 @app.route('/send_message', methods=['POST'])
 @jwt_required()
 def send_message():
@@ -308,7 +308,6 @@ def delete_message():
     return jsonify({"error": "not found or not permitted"}), 404
 
 # ---------- ROUTES ----------
-
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
 def upload_route():
