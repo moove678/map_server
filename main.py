@@ -3,6 +3,7 @@ import uuid
 import logging
 import base64
 from datetime import datetime
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -18,17 +19,22 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.sqlite'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
-# --- Модели ---
+# ---------- MODELS ----------
 
 ignored_users = db.Table('ignored_users',
     db.Column('user', db.String(80), db.ForeignKey('user.username')),
     db.Column('ignored', db.String(80), db.ForeignKey('user.username'))
+)
+
+group_members = db.Table('group_members',
+    db.Column('group_id', db.String(36), db.ForeignKey('group.id')),
+    db.Column('username', db.String(80), db.ForeignKey('user.username'))
 )
 
 class User(db.Model):
@@ -42,21 +48,25 @@ class User(db.Model):
         secondaryjoin=username == ignored_users.c.ignored,
         backref='ignored_by'
     )
+
     def to_json(self):
         return {"username": self.username, "lat": self.lat, "lon": self.lon}
-
-group_members = db.Table('group_members',
-    db.Column('group_id', db.String(36), db.ForeignKey('group.id')),
-    db.Column('username', db.String(80), db.ForeignKey('user.username'))
-)
 
 class Group(db.Model):
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
     owner = db.Column(db.String(80))
+    avatar = db.Column(db.String(200))
     members = db.relationship("User", secondary=group_members, backref="groups")
+
     def to_json(self):
-        return {"id": self.id, "name": self.name, "owner": self.owner}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "owner": self.owner,
+            "avatar": self.avatar,
+            "members": [m.username for m in self.members]
+        }
 
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -67,6 +77,7 @@ class Message(db.Model):
     audio = db.Column(db.String(200))
     photo = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_read = db.Column(db.Boolean, default=False)
 
 class Route(db.Model):
     id = db.Column(db.String(36), primary_key=True)
@@ -90,7 +101,7 @@ class RouteComment(db.Model):
     time = db.Column(db.String(50))
     photo = db.Column(db.String(200))
 
-# --- Вспомогательные ---
+# ---------- HELPERS ----------
 
 def save_file(field):
     if field not in request.files:
@@ -111,14 +122,14 @@ def save_base64(data, ext):
             f.write(decoded)
         return name
     except Exception as e:
-        logging.error(e)
+        logging.error(f"[Base64 error] {e}")
         return None
 
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-# --- Аутентификация ---
+# ---------- AUTH ----------
 
 @app.route('/register', methods=['POST'])
 def register():
@@ -140,7 +151,7 @@ def login():
     token = create_access_token(identity=user.username)
     return jsonify({"access_token": token}), 200
 
-# --- Пользователи ---
+# ---------- USERS ----------
 
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
@@ -160,8 +171,6 @@ def get_users():
     all_users = User.query.all()
     return jsonify([u.to_json() for u in all_users if u.username not in [i.username for i in user.ignored]])
 
-# --- Игнор ---
-
 @app.route('/ignore_user', methods=['POST'])
 @jwt_required()
 def ignore_user():
@@ -173,7 +182,7 @@ def ignore_user():
         db.session.commit()
     return jsonify({"ignored": target})
 
-# --- Группы ---
+# ---------- GROUPS ----------
 
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
@@ -182,8 +191,8 @@ def create_group():
     name = request.json.get('name')
     gid = str(uuid.uuid4())
     g = Group(id=gid, name=name, owner=current)
-    db.session.add(g)
     g.members.append(User.query.get(current))
+    db.session.add(g)
     db.session.commit()
     return jsonify({"group_id": gid})
 
@@ -214,17 +223,33 @@ def leave_group():
 @app.route('/get_groups', methods=['GET'])
 @jwt_required()
 def get_groups():
-    current_user = get_jwt_identity()
-    user = User.query.get(current_user)
-    groups = user.groups
-    return jsonify([{
-        "id": g.id,
-        "name": g.name,
-        "owner": g.owner,
-        "members": [m.username for m in g.members]
-    } for g in groups])
+    user = User.query.get(get_jwt_identity())
+    return jsonify([g.to_json() for g in user.groups])
 
-# --- Сообщения ---
+@app.route('/rename_group', methods=['POST'])
+@jwt_required()
+def rename_group():
+    gid = request.json.get('group_id')
+    new_name = request.json.get('new_name')
+    group = Group.query.get(gid)
+    if group:
+        group.name = new_name
+        db.session.commit()
+    return jsonify({"status": "renamed"})
+
+@app.route('/set_group_avatar', methods=['POST'])
+@jwt_required()
+def set_group_avatar():
+    gid = request.json.get('group_id')
+    img_data = request.json.get('avatar_base64')
+    group = Group.query.get(gid)
+    if group:
+        avatar = save_base64(img_data, 'jpg')
+        group.avatar = avatar
+        db.session.commit()
+    return jsonify({"status": "avatar_updated"})
+
+# ---------- MESSAGES ----------
 
 @app.route('/send_message', methods=['POST'])
 @jwt_required()
@@ -236,6 +261,7 @@ def send_message():
     text = data.get('text', '')
     audio = save_file('audio') or save_base64(data.get('audio', ''), 'wav')
     photo = save_file('photo') or save_base64(data.get('photo', ''), 'jpg')
+
     msg = Message(group_id=group_id, sender=user, receiver=receiver, text=text, audio=audio, photo=photo)
     db.session.add(msg)
     db.session.commit()
@@ -260,11 +286,28 @@ def get_messages():
         return jsonify([])
     messages = q.order_by(Message.id).all()
     return jsonify([{
-        "id": m.id, "from": m.sender, "to": m.receiver,
-        "text": m.text, "photo": m.photo, "audio": m.audio
+        "id": m.id,
+        "from": m.sender,
+        "to": m.receiver,
+        "text": m.text,
+        "photo": m.photo,
+        "audio": m.audio,
+        "is_read": m.is_read,
+        "created_at": m.created_at.isoformat()
     } for m in messages])
 
-# --- Маршруты ---
+@app.route('/delete_message', methods=['POST'])
+@jwt_required()
+def delete_message():
+    mid = request.json.get('message_id')
+    msg = Message.query.get(mid)
+    if msg and msg.sender == get_jwt_identity():
+        db.session.delete(msg)
+        db.session.commit()
+        return jsonify({"status": "deleted"})
+    return jsonify({"error": "not found or not permitted"}), 404
+
+# ---------- ROUTES ----------
 
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
@@ -306,8 +349,6 @@ def get_routes():
         })
     return jsonify(resp)
 
-# --- SOS ---
-
 @app.route('/sos', methods=['POST'])
 @jwt_required()
 def sos():
@@ -315,8 +356,6 @@ def sos():
     data = request.json
     logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
     return jsonify({"message": "SOS received"})
-
-# --- Инициализация ---
 
 @app.before_first_request
 def setup():
