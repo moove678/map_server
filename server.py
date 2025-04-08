@@ -1,246 +1,374 @@
 import os
-import shutil
 import uuid
-import threading
-import queue
-import subprocess
+import logging
+import base64
+from datetime import datetime
+
 from flask import Flask, request, jsonify, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from werkzeug.security import generate_password_hash, check_password_hash
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 
+# --- CONFIG ---
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-jwt-key')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['JSON_AS_ASCII'] = False
+app.config['UPLOAD_FOLDER'] = 'uploads'
 
-###############################################################################
-# НАСТРОЙКИ
-###############################################################################
-# Главная папка, где всё храним, УЧТИ, что user = name заменяй на нужное имя
-PROJECTS_ROOT = "/home/name/PythonAPKProjects"
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
-# Подпапка для сборки
-BUILD_SUBDIR = "buildarea"
+db = SQLAlchemy(app)
+jwt = JWTManager(app)
+migrate = Migrate(app, db)
+logging.basicConfig(level=logging.DEBUG)
 
-# Очередь задач на сборку
-build_queue = queue.Queue()
+# --- MODELS ---
 
-# Информация о сборках: build_id -> { ... }
-builds = {}
+ignored_users = db.Table('ignored_users',
+    db.Column('user', db.String(80), db.ForeignKey('user.username')),
+    db.Column('ignored', db.String(80), db.ForeignKey('user.username'))
+)
 
+group_members = db.Table('group_members',
+    db.Column('group_id', db.String(36), db.ForeignKey('group.id')),
+    db.Column('username', db.String(80), db.ForeignKey('user.username'))
+)
 
-###############################################################################
-# ФУНКЦИЯ-РАБОТНИК: БЕРЁТ ИЗ ОЧЕРЕДИ BUILD_ID И СТРОИТ
-###############################################################################
-def build_worker():
-    while True:
-        build_id = build_queue.get()
-        if build_id is None:
-            continue
+class User(db.Model):
+    username = db.Column(db.String(80), primary_key=True)
+    password = db.Column(db.String(200), nullable=False)
+    lat = db.Column(db.Float, default=0.0)
+    lon = db.Column(db.Float, default=0.0)
+    ignored = db.relationship(
+        'User', secondary=ignored_users,
+        primaryjoin=username == ignored_users.c.user,
+        secondaryjoin=username == ignored_users.c.ignored,
+        backref='ignored_by'
+    )
 
-        info = builds.get(build_id)
-        if not info:
-            continue
+    def to_json(self):
+        return {"username": self.username, "lat": self.lat, "lon": self.lon}
 
-        info["status"] = "building"
-        project_id = info["project_id"]
+class Group(db.Model):
+    id = db.Column(db.String(36), primary_key=True)
+    name = db.Column(db.String(120))
+    owner = db.Column(db.String(80))
+    avatar = db.Column(db.String(200))
+    members = db.relationship("User", secondary=group_members, backref="groups")
 
-        # Папка проекта
-        project_dir = os.path.join(PROJECTS_ROOT, project_id)
+    def to_json(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "owner": self.owner,
+            "avatar": self.avatar,
+            "members": [m.username for m in self.members]
+        }
 
-        # Папка сборки
-        build_dir = os.path.join(project_dir, BUILD_SUBDIR)
+class Message(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.String(36), nullable=True)
+    sender = db.Column(db.String(80), db.ForeignKey('user.username'))
+    receiver = db.Column(db.String(80), nullable=True)
+    text = db.Column(db.Text, default="")
+    audio = db.Column(db.String(200))
+    photo = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    is_read = db.Column(db.Boolean, default=False)
 
-        # Файл лога
-        log_file = info["log_path"]
+class Route(db.Model):
+    id = db.Column(db.String(36), primary_key=True)
+    name = db.Column(db.String(120))
+    username = db.Column(db.String(80), db.ForeignKey('user.username'))
+    distance = db.Column(db.Float)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-        try:
-            # Переходим в директорию сборки (где лежат main.py, buildozer.spec и т.д.)
-            os.chdir(build_dir)
+class RoutePoint(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
+    lat = db.Column(db.Float)
+    lon = db.Column(db.Float)
 
-            # (1) buildozer android clean
-            cmd_clean = ["buildozer", "android", "clean"]
-            p_clean = subprocess.run(cmd_clean, capture_output=True, text=True)
-            with open(log_file, "a", encoding="utf-8") as lf:
-                lf.write("=== CLEAN PHASE ===\n")
-                lf.write(p_clean.stdout)
-                lf.write(p_clean.stderr)
+class RouteComment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
+    lat = db.Column(db.Float)
+    lon = db.Column(db.Float)
+    text = db.Column(db.Text)
+    time = db.Column(db.String(50))
+    photo = db.Column(db.String(200))
 
-            if p_clean.returncode != 0:
-                info["status"] = "fail"
-                build_queue.task_done()
-                continue
+# --- HELPERS ---
 
-            # (2) buildozer android debug
-            cmd_build = ["buildozer", "android", "debug"]
-            p_build = subprocess.run(cmd_build, capture_output=True, text=True)
-            with open(log_file, "a", encoding="utf-8") as lf:
-                lf.write("\n=== BUILD PHASE ===\n")
-                lf.write(p_build.stdout)
-                lf.write(p_build.stderr)
+def save_file(field):
+    if field not in request.files:
+        return None
+    f = request.files[field]
+    if not f.filename:
+        return None
+    ext = os.path.splitext(f.filename)[1]
+    new_name = f"{uuid.uuid4()}{ext}"
+    f.save(os.path.join(app.config['UPLOAD_FOLDER'], new_name))
+    return new_name
 
-            if p_build.returncode != 0:
-                info["status"] = "fail"
-                build_queue.task_done()
-                continue
+def save_base64(data, ext):
+    try:
+        decoded = base64.b64decode(data)
+        name = f"{uuid.uuid4()}.{ext}"
+        with open(os.path.join(app.config['UPLOAD_FOLDER'], name), "wb") as f:
+            f.write(decoded)
+        return name
+    except Exception as e:
+        logging.error(f"[Base64 error] {e}")
+        return None
 
-            # Ищем APK в bin/
-            bin_path = os.path.join(build_dir, "bin")
-            apk_files = [f for f in os.listdir(bin_path) if f.endswith(".apk")]
-            if not apk_files:
-                info["status"] = "fail"
-                build_queue.task_done()
-                continue
+@app.route('/uploads/<filename>')
+def serve_upload(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-            # Берём последний APK
-            apk_name = apk_files[-1]
-            apk_full = os.path.join(bin_path, apk_name)
+# --- AUTH ---
 
-            info["apk_path"] = apk_full
-            info["status"] = "success"
-
-        except Exception as e:
-            info["status"] = "fail"
-            with open(log_file, "a", encoding="utf-8") as lf:
-                lf.write(f"\n=== EXCEPTION ===\n{str(e)}\n")
-
-        finally:
-            build_queue.task_done()
-
-
-# Запуск рабочего потока
-worker_thread = threading.Thread(target=build_worker, daemon=True)
-worker_thread.start()
-
-###############################################################################
-# ENDPOINTЫ
-###############################################################################
-
-@app.route("/")
-def index():
-    return "Сервер очереди сборок работает в /home/name/PythonAPKProjects!"
-
-@app.route("/submit", methods=["POST"])
-def submit_project():
-    """
-    Принимает JSON:
-      {
-        "project_id": "имя_проекта",
-        "files": [
-          {
-            "filename": "main.py",
-            "code": "... (текст файла)"
-          },
-          ...
-        ]
-      }
-    Сохраняет файлы в /home/name/PythonAPKProjects/<project_id>/src/
-    """
+@app.route('/register', methods=['POST'])
+def register():
     data = request.json
-    if not data:
-        return jsonify({"error": "No JSON body"}), 400
+    if User.query.get(data['username']):
+        return jsonify({"error": "exists"}), 400
+    hashed = generate_password_hash(data['password'])
+    user = User(username=data['username'], password=hashed)
+    db.session.add(user)
+    db.session.commit()
+    return jsonify({"message": "registered"}), 200
 
-    project_id = data.get("project_id")
-    files = data.get("files")
-    if not project_id or not files:
-        return jsonify({"error": "project_id и files обязательны"}), 400
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    user = User.query.get(data['username'])
+    if not user or not check_password_hash(user.password, data['password']):
+        return jsonify({"error": "invalid"}), 401
+    token = create_access_token(identity=user.username)
+    return jsonify({"access_token": token}), 200
 
-    project_dir = os.path.join(PROJECTS_ROOT, project_id)
-    src_dir = os.path.join(project_dir, "src")
+# --- USERS ---
 
-    os.makedirs(src_dir, exist_ok=True)
+@app.route('/update_location', methods=['POST'])
+@jwt_required()
+def update_location():
+    user = User.query.get(get_jwt_identity())
+    data = request.json
+    user.lat = data['lat']
+    user.lon = data['lon']
+    db.session.commit()
+    return jsonify({"status": "ok"})
 
-    for item in files:
-        fn = item.get("filename")
-        code = item.get("code", "")
-        if not fn:
-            continue
-        file_path = os.path.join(src_dir, fn)
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(code)
+@app.route('/get_users', methods=['GET'])
+@jwt_required()
+def get_users():
+    current = get_jwt_identity()
+    user = User.query.get(current)
+    all_users = User.query.all()
+    return jsonify([u.to_json() for u in all_users if u.username not in [i.username for i in user.ignored]])
 
-    return jsonify({"message": "OK", "project_id": project_id})
+@app.route('/ignore_user', methods=['POST'])
+@jwt_required()
+def ignore_user():
+    user = User.query.get(get_jwt_identity())
+    target = request.json.get('username')
+    target_user = User.query.get(target)
+    if target_user and target_user not in user.ignored:
+        user.ignored.append(target_user)
+        db.session.commit()
+    return jsonify({"ignored": target})
 
-@app.route("/build/<project_id>", methods=["POST"])
-def enqueue_build(project_id):
-    """
-    Добавляем задачу сборки проекта в очередь.
-    1) Копируем src -> buildarea
-    2) Создаём запись в builds{}
-    3) Отдаём build_id
-    """
-    project_dir = os.path.join(PROJECTS_ROOT, project_id)
-    src_dir = os.path.join(project_dir, "src")
-    build_dir = os.path.join(project_dir, BUILD_SUBDIR)
+# --- GROUPS ---
 
-    if not os.path.exists(src_dir):
-        return jsonify({"error": f"Проект {project_id} не найден"}), 404
+@app.route('/create_group', methods=['POST'])
+@jwt_required()
+def create_group():
+    try:
+        current = get_jwt_identity()
+        name = request.json.get('name')
+        if not name:
+            return jsonify({"error": "No name"}), 400
+        gid = str(uuid.uuid4())
+        g = Group(id=gid, name=name, owner=current)
+        db.session.add(g)
+        g.members.append(User.query.get(current))
+        db.session.commit()
+        return jsonify({"group_id": gid})
+    except Exception as e:
+        logging.exception("Ошибка создания группы")
+        return jsonify({"error": "create_group_failed"}), 500
 
-    # Удаляем старую папку buildarea, если была
-    if os.path.exists(build_dir):
-        shutil.rmtree(build_dir)
-    os.makedirs(build_dir, exist_ok=True)
+@app.route('/join_group', methods=['POST'])
+@jwt_required()
+def join_group():
+    user = User.query.get(get_jwt_identity())
+    gid = request.json.get('group_id')
+    g = Group.query.get(gid)
+    if g and user not in g.members:
+        g.members.append(user)
+        db.session.commit()
+    return jsonify({"status": "joined"})
 
-    # Копируем все файлы из src/
-    for item in os.listdir(src_dir):
-        sp = os.path.join(src_dir, item)
-        dp = os.path.join(build_dir, item)
-        if os.path.isfile(sp):
-            shutil.copy2(sp, dp)
-        else:
-            if os.path.isdir(sp):
-                shutil.copytree(sp, dp)
+@app.route('/leave_group', methods=['POST'])
+@jwt_required()
+def leave_group():
+    user = User.query.get(get_jwt_identity())
+    gid = request.json.get('group_id')
+    g = Group.query.get(gid)
+    if g and user in g.members:
+        g.members.remove(user)
+        if not g.members:
+            db.session.delete(g)
+        db.session.commit()
+    return jsonify({"status": "left"})
 
-    # Создаём уникальный build_id
-    build_id = str(uuid.uuid4())
+@app.route('/get_groups', methods=['GET'])
+@jwt_required()
+def get_groups():
+    try:
+        user = User.query.get(get_jwt_identity())
+        return jsonify([g.to_json() for g in user.groups])
+    except Exception as e:
+        logging.exception("Ошибка при получении групп")
+        return jsonify({"error": "internal"}), 500
 
-    # Файл для логов
-    log_file = os.path.join(project_dir, f"build_{build_id}.log")
+@app.route('/rename_group', methods=['POST'])
+@jwt_required()
+def rename_group():
+    gid = request.json.get('group_id')
+    new_name = request.json.get('new_name')
+    group = Group.query.get(gid)
+    if group:
+        group.name = new_name
+        db.session.commit()
+    return jsonify({"status": "renamed"})
 
-    builds[build_id] = {
-        "status": "pending",
-        "log_path": log_file,
-        "apk_path": None,
-        "project_id": project_id
-    }
+@app.route('/set_group_avatar', methods=['POST'])
+@jwt_required()
+def set_group_avatar():
+    gid = request.json.get('group_id')
+    img_data = request.json.get('avatar_base64')
+    group = Group.query.get(gid)
+    if group:
+        avatar = save_base64(img_data, 'jpg')
+        group.avatar = avatar
+        db.session.commit()
+    return jsonify({"status": "avatar_updated"})
 
-    build_queue.put(build_id)
-    return jsonify({"build_id": build_id})
+# --- MESSAGES ---
 
-@app.route("/status/<build_id>", methods=["GET"])
-def get_status(build_id):
-    info = builds.get(build_id)
-    if not info:
-        return jsonify({"error": "Build not found"}), 404
-    return jsonify({"build_id": build_id, "status": info["status"]})
+@app.route('/send_message', methods=['POST'])
+@jwt_required()
+def send_message():
+    user = get_jwt_identity()
+    data = request.form or request.json or {}
+    group_id = data.get('group_id')
+    receiver = data.get('receiver')
+    text = data.get('text', '')
+    audio = save_file('audio') or save_base64(data.get('audio', ''), 'wav')
+    photo = save_file('photo') or save_base64(data.get('photo', ''), 'jpg')
 
-@app.route("/logs/<build_id>", methods=["GET"])
-def get_logs(build_id):
-    info = builds.get(build_id)
-    if not info:
-        return jsonify({"error": "Build not found"}), 404
+    msg = Message(group_id=group_id, sender=user, receiver=receiver, text=text, audio=audio, photo=photo)
+    db.session.add(msg)
+    db.session.commit()
+    return jsonify({"message": "sent"})
 
-    log_file = info["log_path"]
-    if not os.path.exists(log_file):
-        return jsonify({"logs": ""})
+@app.route('/get_messages', methods=['GET'])
+@jwt_required()
+def get_messages():
+    current = get_jwt_identity()
+    group_id = request.args.get('group_id')
+    receiver = request.args.get('receiver')
+    after_id = int(request.args.get('after_id', 0))
+    q = Message.query.filter(Message.id > after_id)
 
-    with open(log_file, "r", encoding="utf-8") as lf:
-        content = lf.read()
-    return jsonify({"logs": content})
+    if group_id:
+        q = q.filter_by(group_id=group_id)
+    elif receiver:
+        q = q.filter(
+            ((Message.sender == current) & (Message.receiver == receiver)) |
+            ((Message.sender == receiver) & (Message.receiver == current))
+        ).filter(Message.group_id == None)
+    else:
+        return jsonify([])
 
-@app.route("/download/<build_id>", methods=["GET"])
-def download_apk(build_id):
-    info = builds.get(build_id)
-    if not info:
-        return jsonify({"error": "Build not found"}), 404
+    messages = q.order_by(Message.id).all()
+    return jsonify([{
+        "id": m.id,
+        "from": m.sender,
+        "to": m.receiver,
+        "text": m.text,
+        "photo": m.photo,
+        "audio": m.audio,
+        "is_read": m.is_read,
+        "created_at": m.created_at.isoformat()
+    } for m in messages])
 
-    if info["status"] != "success":
-        return jsonify({"error": "Сборка не завершена успешно"}), 400
+@app.route('/delete_message', methods=['POST'])
+@jwt_required()
+def delete_message():
+    mid = request.json.get('message_id')
+    msg = Message.query.get(mid)
+    if msg and msg.sender == get_jwt_identity():
+        db.session.delete(msg)
+        db.session.commit()
+        return jsonify({"status": "deleted"})
+    return jsonify({"error": "not found or not permitted"}), 404
 
-    apk_path = info["apk_path"]
-    if not apk_path or not os.path.exists(apk_path):
-        return jsonify({"error": "APK not found"}), 404
+# --- ROUTES ---
 
-    # Отдаём APK
-    apk_dir = os.path.dirname(apk_path)
-    apk_name = os.path.basename(apk_path)
-    return send_from_directory(apk_dir, apk_name, as_attachment=True)
+@app.route('/upload_route', methods=['POST'])
+@jwt_required()
+def upload_route():
+    current = get_jwt_identity()
+    data = request.json
+    rid = str(uuid.uuid4())
+    r = Route(id=rid, name=data.get('route_name', 'Route'), username=current, distance=data.get('distance', 0.0))
+    db.session.add(r)
+    db.session.commit()
+    for p in data.get('route_points', []):
+        db.session.add(RoutePoint(route_id=rid, lat=p['lat'], lon=p['lon']))
+    for c in data.get('route_comments', []):
+        photo = c.get('photo')
+        photo_name = save_base64(photo, 'jpg') if photo else None
+        db.session.add(RouteComment(
+            route_id=rid, lat=c['lat'], lon=c['lon'],
+            text=c['text'], time=c['time'], photo=photo_name
+        ))
+    db.session.commit()
+    return jsonify({"status": "uploaded"})
 
-if __name__ == "__main__":
-    os.makedirs(PROJECTS_ROOT, exist_ok=True)
-    app.run(host="0.0.0.0", port=8001)
+@app.route('/get_routes', methods=['GET'])
+@jwt_required()
+def get_routes():
+    routes = Route.query.order_by(Route.created_at.desc()).all()
+    resp = []
+    for r in routes:
+        comments = RouteComment.query.filter_by(route_id=r.id).all()
+        resp.append({
+            "name": r.name,
+            "distance": r.distance,
+            "date": r.created_at.strftime("%Y-%m-%d %H:%M"),
+            "comments": [{
+                "lat": c.lat, "lon": c.lon,
+                "text": c.text, "time": c.time,
+                "photo": c.photo
+            } for c in comments]
+        })
+    return jsonify(resp)
+
+@app.route('/sos', methods=['POST'])
+@jwt_required()
+def sos():
+    user = get_jwt_identity()
+    data = request.json
+    logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
+    return jsonify({"message": "SOS received"})
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

@@ -12,9 +12,9 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 
 # --- CONFIG ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'very-secret-flask-key'
-app.config['JWT_SECRET_KEY'] = 'very-secret-jwt-key'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.sqlite'
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
+app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-jwt-key')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite').replace("postgres://", "postgresql://")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -369,10 +369,6 @@ def sos():
     data = request.json
     logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
     return jsonify({"message": "SOS received"})
-
-@app.before_first_request
-def setup():
-    db.create_all()
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

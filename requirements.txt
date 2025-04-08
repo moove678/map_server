@@ -54,4 +54,5 @@ uvicorn==0.34.0
 waitress==3.0.2
 websockets==15.0.1
 Werkzeug==2.2.3
-flask_jwt_extended==4.4.4
+Flask-JWT-Extended
+psycopg2-binary
