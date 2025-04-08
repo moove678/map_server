@@ -14,7 +14,7 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-jwt-key')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite').replace("postgres://", "postgresql://")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -28,16 +28,17 @@ logging.basicConfig(level=logging.DEBUG)
 
 # --- MODELS ---
 ignored_users = db.Table('ignored_users',
-    db.Column('user', db.String(80), db.ForeignKey('user.username', name='fk_ignore_user')),
-    db.Column('ignored', db.String(80), db.ForeignKey('user.username', name='fk_ignore_ignored'))
+    db.Column('user', db.String(80), db.ForeignKey('users.username', name='fk_ignore_user')),
+    db.Column('ignored', db.String(80), db.ForeignKey('users.username', name='fk_ignore_ignored'))
 )
 
 group_members = db.Table('group_members',
-    db.Column('group_id', db.String(36), db.ForeignKey('group.id', name='fk_group_id')),
-    db.Column('username', db.String(80), db.ForeignKey('user.username', name='fk_group_username'))
+    db.Column('group_id', db.String(36), db.ForeignKey('groups.id', name='fk_group_id')),
+    db.Column('username', db.String(80), db.ForeignKey('users.username', name='fk_group_username'))
 )
 
 class User(db.Model):
+    __tablename__ = 'users'
     username = db.Column(db.String(80), primary_key=True)
     password = db.Column(db.String(200), nullable=False)
     lat = db.Column(db.Float, default=0.0)
@@ -53,6 +54,7 @@ class User(db.Model):
         return {"username": self.username, "lat": self.lat, "lon": self.lon}
 
 class Group(db.Model):
+    __tablename__ = 'groups'
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
     owner = db.Column(db.String(80))
@@ -69,9 +71,10 @@ class Group(db.Model):
         }
 
 class Message(db.Model):
+    __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
     group_id = db.Column(db.String(36), nullable=True)
-    sender = db.Column(db.String(80), db.ForeignKey('user.username', name='fk_msg_sender'))
+    sender = db.Column(db.String(80), db.ForeignKey('users.username', name='fk_msg_sender'))
     receiver = db.Column(db.String(80), nullable=True)
     text = db.Column(db.Text, default="")
     audio = db.Column(db.String(200))
@@ -80,21 +83,24 @@ class Message(db.Model):
     is_read = db.Column(db.Boolean, default=False)
 
 class Route(db.Model):
+    __tablename__ = 'routes'
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
-    username = db.Column(db.String(80), db.ForeignKey('user.username', name='fk_route_username'))
+    username = db.Column(db.String(80), db.ForeignKey('users.username', name='fk_route_username'))
     distance = db.Column(db.Float)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class RoutePoint(db.Model):
+    __tablename__ = 'route_points'
     id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('route.id', name='fk_point_route'))
+    route_id = db.Column(db.String(36), db.ForeignKey('routes.id', name='fk_point_route'))
     lat = db.Column(db.Float)
     lon = db.Column(db.Float)
 
 class RouteComment(db.Model):
+    __tablename__ = 'route_comments'
     id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('route.id', name='fk_comment_route'))
+    route_id = db.Column(db.String(36), db.ForeignKey('routes.id', name='fk_comment_route'))
     lat = db.Column(db.Float)
     lon = db.Column(db.Float)
     text = db.Column(db.Text)
@@ -262,7 +268,6 @@ def send_message():
     text = data.get('text', '')
     audio = save_file('audio') or save_base64(data.get('audio', ''), 'wav')
     photo = save_file('photo') or save_base64(data.get('photo', ''), 'jpg')
-
     msg = Message(group_id=group_id, sender=user, receiver=receiver, text=text, audio=audio, photo=photo)
     db.session.add(msg)
     db.session.commit()
@@ -276,7 +281,6 @@ def get_messages():
     receiver = request.args.get('receiver')
     after_id = int(request.args.get('after_id', 0))
     q = Message.query.filter(Message.id > after_id)
-
     if group_id:
         q = q.filter_by(group_id=group_id)
     elif receiver:
@@ -286,7 +290,6 @@ def get_messages():
         ).filter(Message.group_id == None)
     else:
         return jsonify([])
-
     messages = q.order_by(Message.id).all()
     return jsonify([{
         "id": m.id,
