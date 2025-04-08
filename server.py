@@ -3,22 +3,19 @@ import uuid
 import logging
 import base64
 from datetime import datetime
-
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 
-# --- CONFIG ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-jwt-key')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite').replace("postgres://", "postgresql://")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
-
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db = SQLAlchemy(app)
@@ -26,19 +23,19 @@ jwt = JWTManager(app)
 migrate = Migrate(app, db)
 logging.basicConfig(level=logging.DEBUG)
 
-# --- MODELS ---
-
+# ---------- MODELS ----------
 ignored_users = db.Table('ignored_users',
-    db.Column('user', db.String(80), db.ForeignKey('user.username')),
-    db.Column('ignored', db.String(80), db.ForeignKey('user.username'))
+    db.Column('user', db.String(80), db.ForeignKey('users.username', name='fk_ignore_user')),
+    db.Column('ignored', db.String(80), db.ForeignKey('users.username', name='fk_ignore_ignored'))
 )
 
 group_members = db.Table('group_members',
-    db.Column('group_id', db.String(36), db.ForeignKey('group.id')),
-    db.Column('username', db.String(80), db.ForeignKey('user.username'))
+    db.Column('group_id', db.String(36), db.ForeignKey('groups.id', name='fk_group_id')),
+    db.Column('username', db.String(80), db.ForeignKey('users.username', name='fk_group_username'))
 )
 
 class User(db.Model):
+    __tablename__ = 'users'
     username = db.Column(db.String(80), primary_key=True)
     password = db.Column(db.String(200), nullable=False)
     lat = db.Column(db.Float, default=0.0)
@@ -53,7 +50,9 @@ class User(db.Model):
     def to_json(self):
         return {"username": self.username, "lat": self.lat, "lon": self.lon}
 
+
 class Group(db.Model):
+    __tablename__ = 'groups'
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
     owner = db.Column(db.String(80))
@@ -69,10 +68,12 @@ class Group(db.Model):
             "members": [m.username for m in self.members]
         }
 
+
 class Message(db.Model):
+    __tablename__ = 'messages'
     id = db.Column(db.Integer, primary_key=True)
-    group_id = db.Column(db.String(36), nullable=True)
-    sender = db.Column(db.String(80), db.ForeignKey('user.username'))
+    group_id = db.Column(db.String(36), db.ForeignKey('groups.id', name='fk_msg_group'), nullable=True)
+    sender = db.Column(db.String(80), db.ForeignKey('users.username', name='fk_msg_sender'))
     receiver = db.Column(db.String(80), nullable=True)
     text = db.Column(db.Text, default="")
     audio = db.Column(db.String(200))
@@ -80,30 +81,36 @@ class Message(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_read = db.Column(db.Boolean, default=False)
 
+
 class Route(db.Model):
+    __tablename__ = 'routes'
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
-    username = db.Column(db.String(80), db.ForeignKey('user.username'))
+    username = db.Column(db.String(80), db.ForeignKey('users.username', name='fk_route_username'))
     distance = db.Column(db.Float)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+
 class RoutePoint(db.Model):
+    __tablename__ = 'route_points'
     id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
+    route_id = db.Column(db.String(36), db.ForeignKey('routes.id', name='fk_point_route'))
     lat = db.Column(db.Float)
     lon = db.Column(db.Float)
 
+
 class RouteComment(db.Model):
+    __tablename__ = 'route_comments'
     id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
+    route_id = db.Column(db.String(36), db.ForeignKey('routes.id', name='fk_comment_route'))
     lat = db.Column(db.Float)
     lon = db.Column(db.Float)
     text = db.Column(db.Text)
     time = db.Column(db.String(50))
     photo = db.Column(db.String(200))
 
-# --- HELPERS ---
 
+# ---------- HELPERS ----------
 def save_file(field):
     if field not in request.files:
         return None
@@ -131,7 +138,6 @@ def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # --- AUTH ---
-
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -153,7 +159,6 @@ def login():
     return jsonify({"access_token": token}), 200
 
 # --- USERS ---
-
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
 def update_location():
@@ -184,24 +189,19 @@ def ignore_user():
     return jsonify({"ignored": target})
 
 # --- GROUPS ---
-
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
 def create_group():
-    try:
-        current = get_jwt_identity()
-        name = request.json.get('name')
-        if not name:
-            return jsonify({"error": "No name"}), 400
-        gid = str(uuid.uuid4())
-        g = Group(id=gid, name=name, owner=current)
-        db.session.add(g)
-        g.members.append(User.query.get(current))
-        db.session.commit()
-        return jsonify({"group_id": gid})
-    except Exception as e:
-        logging.exception("Ошибка создания группы")
-        return jsonify({"error": "create_group_failed"}), 500
+    current = get_jwt_identity()
+    name = request.json.get('name')
+    if not name:
+        return jsonify({"error": "No name"}), 400
+    gid = str(uuid.uuid4())
+    g = Group(id=gid, name=name, owner=current)
+    db.session.add(g)
+    g.members.append(User.query.get(current))
+    db.session.commit()
+    return jsonify({"group_id": gid})
 
 @app.route('/join_group', methods=['POST'])
 @jwt_required()
@@ -230,12 +230,8 @@ def leave_group():
 @app.route('/get_groups', methods=['GET'])
 @jwt_required()
 def get_groups():
-    try:
-        user = User.query.get(get_jwt_identity())
-        return jsonify([g.to_json() for g in user.groups])
-    except Exception as e:
-        logging.exception("Ошибка при получении групп")
-        return jsonify({"error": "internal"}), 500
+    user = User.query.get(get_jwt_identity())
+    return jsonify([g.to_json() for g in user.groups])
 
 @app.route('/rename_group', methods=['POST'])
 @jwt_required()
@@ -261,7 +257,6 @@ def set_group_avatar():
     return jsonify({"status": "avatar_updated"})
 
 # --- MESSAGES ---
-
 @app.route('/send_message', methods=['POST'])
 @jwt_required()
 def send_message():
@@ -321,7 +316,6 @@ def delete_message():
     return jsonify({"error": "not found or not permitted"}), 404
 
 # --- ROUTES ---
-
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
 def upload_route():
@@ -331,6 +325,7 @@ def upload_route():
     r = Route(id=rid, name=data.get('route_name', 'Route'), username=current, distance=data.get('distance', 0.0))
     db.session.add(r)
     db.session.commit()
+
     for p in data.get('route_points', []):
         db.session.add(RoutePoint(route_id=rid, lat=p['lat'], lon=p['lon']))
     for c in data.get('route_comments', []):
@@ -369,6 +364,7 @@ def sos():
     data = request.json
     logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
     return jsonify({"message": "SOS received"})
+
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
