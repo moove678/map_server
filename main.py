@@ -1,361 +1,295 @@
-import os
-import uuid
+import math
 import logging
-import base64
-from datetime import datetime
+import requests
 
-from flask import Flask, request, jsonify, send_from_directory
-from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
-from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from kivy.uix.screenmanager import Screen
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.button import Button
+from kivy.clock import Clock
+from kivy_garden.mapview import MapView, MapMarker
+from kivy.metrics import dp
+from kivy.graphics import Color, Line, InstructionGroup
 
-# --- CONFIG ---
-app = Flask(__name__)
-app.config['SECRET_KEY'] = 'dev-secret-key'
-app.config['JWT_SECRET_KEY'] = 'dev-jwt-key'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.sqlite'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['JSON_AS_ASCII'] = False
-app.config['UPLOAD_FOLDER'] = 'uploads'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+from plyer import camera
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.label import Label
+from kivy.uix.textinput import TextInput
+from kivy.uix.popup import Popup
 
-db = SQLAlchemy(app)
-jwt = JWTManager(app)
-migrate = Migrate(app, db)
-logging.basicConfig(level=logging.DEBUG)
+from core.real_gps_handler import RealGPS
+from core.utils import headers_with_token, show_info
+from ui.nav_bar import add_nav_bar
+from ui.shared_popups import create_comment_popup
+from ui.popups import SosFormPopup
 
-# --- MODELS ---
-ignored_users = db.Table('ignored_users',
-    db.Column('user', db.String(80), db.ForeignKey('users.username')),
-    db.Column('ignored', db.String(80), db.ForeignKey('users.username'))
-)
+from kivy.app import App
 
-group_members = db.Table('group_members',
-    db.Column('group_id', db.String(36), db.ForeignKey('groups.id')),
-    db.Column('username', db.String(80), db.ForeignKey('users.username'))
-)
 
-class User(db.Model):
-    __tablename__ = 'users'
-    username = db.Column(db.String(80), primary_key=True)
-    password = db.Column(db.String(200), nullable=False)
-    lat = db.Column(db.Float, default=0.0)
-    lon = db.Column(db.Float, default=0.0)
-    ignored = db.relationship(
-        'User', secondary=ignored_users,
-        primaryjoin=username == ignored_users.c.user,
-        secondaryjoin=username == ignored_users.c.ignored,
-        backref='ignored_by'
-    )
+class MapScreen(Screen):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.name = "map"
+        self.main_layout = FloatLayout()
+        self.add_widget(self.main_layout)
 
-    def to_json(self):
-        return {"username": self.username, "lat": self.lat, "lon": self.lon}
+        app = App.get_running_app()
+        t = app.get_translations()
 
-class Group(db.Model):
-    __tablename__ = 'groups'
-    id = db.Column(db.String(36), primary_key=True)
-    name = db.Column(db.String(120))
-    owner = db.Column(db.String(80))
-    avatar = db.Column(db.String(200))
-    members = db.relationship("User", secondary=group_members, backref="groups")
+        self.map_view = MapView(lat=0, lon=0, zoom=2)
+        self.map_view.size_hint = (1, 1)
+        self.map_view.bind(on_touch_down=self.on_map_touch)
+        self.main_layout.add_widget(self.map_view)
 
-    def to_json(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "owner": self.owner,
-            "avatar": self.avatar,
-            "members": [m.username for m in self.members]
-        }
+        self.user_marker = MapMarker(lat=0, lon=0)
+        self.map_view.add_widget(self.user_marker)
 
-class Message(db.Model):
-    __tablename__ = 'messages'
-    id = db.Column(db.Integer, primary_key=True)
-    group_id = db.Column(db.String(36), db.ForeignKey('groups.id'), nullable=True)
-    sender = db.Column(db.String(80), db.ForeignKey('users.username'))
-    receiver = db.Column(db.String(80), nullable=True)
-    text = db.Column(db.Text, default="")
-    audio = db.Column(db.String(200))
-    photo = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_read = db.Column(db.Boolean, default=False)
+        self.gps_handler = RealGPS(self.on_gps_location)
+        self.gps_started = False
+        self.follow_user = True
+        self.other_markers = {}
 
-class Route(db.Model):
-    __tablename__ = 'routes'
-    id = db.Column(db.String(36), primary_key=True)
-    name = db.Column(db.String(120))
-    username = db.Column(db.String(80), db.ForeignKey('users.username'))
-    distance = db.Column(db.Float)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+        self.center_btn = Button(
+            text=t["center"],
+            size_hint=(None, None),
+            size=(dp(40), dp(40)),
+            pos_hint={"right": 0.98, "y": 0.02},
+            background_color=(0, 1, 0, 0.6),
+            color=(0, 0, 0, 1)
+        )
+        self.center_btn.bind(on_press=self.toggle_follow)
+        self.main_layout.add_widget(self.center_btn)
 
-class RoutePoint(db.Model):
-    __tablename__ = 'route_points'
-    id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('routes.id'))
-    lat = db.Column(db.Float)
-    lon = db.Column(db.Float)
+        self.sos_btn = Button(
+            text=t["sos"],
+            size_hint=(None, None),
+            size=(dp(100), dp(60)),
+            pos_hint={"center_x": 0.5, "y": 0.02},
+            background_color=(1, 0, 0, 0.8),
+            color=(1, 1, 1, 1),
+            font_name=app.UNIVERSAL_FONT
+        )
+        self.sos_btn.bind(on_press=self.open_sos_form)
+        self.main_layout.add_widget(self.sos_btn)
 
-class RouteComment(db.Model):
-    __tablename__ = 'route_comments'
-    id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('routes.id'))
-    lat = db.Column(db.Float)
-    lon = db.Column(db.Float)
-    text = db.Column(db.Text)
-    time = db.Column(db.String(50))
-    photo = db.Column(db.String(200))
+        self.group_btn = Button(
+            text=t["group_button"],
+            size_hint=(0.3, 0.06),
+            pos_hint={"x": 0.02, "top": 0.95},
+            font_name=app.UNIVERSAL_FONT,
+            background_color=app.theme_bg,
+            color=app.theme_fg
+        )
+        self.group_btn.bind(on_press=self.on_group_btn)
+        self.main_layout.add_widget(self.group_btn)
 
-# --- HELPERS ---
-def save_file(field):
-    if field not in request.files:
-        return None
-    f = request.files[field]
-    if not f.filename:
-        return None
-    ext = os.path.splitext(f.filename)[1]
-    new_name = f"{uuid.uuid4()}{ext}"
-    f.save(os.path.join(app.config['UPLOAD_FOLDER'], new_name))
-    return new_name
+        self.record_btn = Button(
+            text="*REC*",
+            size_hint=(None, None),
+            size=(dp(80), dp(40)),
+            pos_hint={"right": 0.98, "top": 0.85},
+            background_color=(1, 0, 0, 0.7),
+            color=(1, 1, 1, 1)
+        )
+        self.record_btn.bind(on_press=self.add_comment_with_photo)
 
-def save_base64(data, ext):
-    try:
-        decoded = base64.b64decode(data)
-        name = f"{uuid.uuid4()}.{ext}"
-        with open(os.path.join(app.config['UPLOAD_FOLDER'], name), "wb") as f:
-            f.write(decoded)
-        return name
-    except Exception as e:
-        logging.error(f"[Base64 error] {e}")
-        return None
+        self.route_overlay_widgets = []
+        self.route_overlay_instructions = InstructionGroup()
+        self.clear_overlay_btn = None
 
-@app.route('/uploads/<filename>')
-def serve_upload(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+        Clock.schedule_interval(self.update_other_users, 5)
+        Clock.schedule_interval(self.auto_center_if_follow, 3)
 
-# --- AUTH ---
-@app.route('/register', methods=['POST'])
-def register():
-    data = request.json
-    if User.query.get(data['username']):
-        return jsonify({"error": "exists"}), 400
-    hashed = generate_password_hash(data['password'])
-    user = User(username=data['username'], password=hashed)
-    db.session.add(user)
-    db.session.commit()
-    return jsonify({"message": "registered"}), 200
+        add_nav_bar(self)
 
-@app.route('/login', methods=['POST'])
-def login():
-    data = request.json
-    user = User.query.get(data['username'])
-    if not user or not check_password_hash(user.password, data['password']):
-        return jsonify({"error": "invalid"}), 401
-    token = create_access_token(identity=user.username)
-    return jsonify({"access_token": token}), 200
+    def on_pre_enter(self):
+        app = App.get_running_app()
 
-# --- USERS ---
-@app.route('/update_location', methods=['POST'])
-@jwt_required()
-def update_location():
-    user = User.query.get(get_jwt_identity())
-    data = request.json
-    user.lat = data['lat']
-    user.lon = data['lon']
-    db.session.commit()
-    return jsonify({"status": "ok"})
+        self.clear_route_overlay()
+        if app.route_overlay_data:
+            self.load_route_overlay(app.route_overlay_data)
 
-@app.route('/get_users', methods=['GET'])
-@jwt_required()
-def get_users():
-    current = get_jwt_identity()
-    user = User.query.get(current)
-    all_users = User.query.all()
-    return jsonify([u.to_json() for u in all_users if u.username not in [i.username for i in user.ignored]])
+        if app.route_handler.is_recording:
+            if not self.record_btn.parent:
+                self.main_layout.add_widget(self.record_btn)
+        else:
+            if self.record_btn.parent:
+                self.main_layout.remove_widget(self.record_btn)
 
-@app.route('/ignore_user', methods=['POST'])
-@jwt_required()
-def ignore_user():
-    user = User.query.get(get_jwt_identity())
-    target = request.json.get('username')
-    target_user = User.query.get(target)
-    if target_user and target_user not in user.ignored:
-        user.ignored.append(target_user)
-        db.session.commit()
-    return jsonify({"ignored": target})
+        if not self.gps_started:
+            self.gps_handler.start()
+            self.gps_started = True
 
-# --- GROUPS ---
-@app.route('/create_group', methods=['POST'])
-@jwt_required()
-def create_group():
-    current = get_jwt_identity()
-    name = request.json.get('name')
-    if not name:
-        return jsonify({"error": "No name"}), 400
-    gid = str(uuid.uuid4())
-    g = Group(id=gid, name=name, owner=current)
-    db.session.add(g)
-    g.members.append(User.query.get(current))
-    db.session.commit()
-    return jsonify({"group_id": gid})
+    def on_gps_location(self, lat, lon):
+        self.user_marker.lat = lat
+        self.user_marker.lon = lon
 
-@app.route('/join_group', methods=['POST'])
-@jwt_required()
-def join_group():
-    user = User.query.get(get_jwt_identity())
-    gid = request.json.get('group_id')
-    g = Group.query.get(gid)
-    if g and user not in g.members:
-        g.members.append(user)
-        db.session.commit()
-    return jsonify({"status": "joined"})
+        if self.follow_user:
+            self.map_view.center_on(lat, lon)
 
-@app.route('/leave_group', methods=['POST'])
-@jwt_required()
-def leave_group():
-    user = User.query.get(get_jwt_identity())
-    gid = request.json.get('group_id')
-    g = Group.query.get(gid)
-    if g and user in g.members:
-        g.members.remove(user)
-        if not g.members:
-            db.session.delete(g)
-        db.session.commit()
-    return jsonify({"status": "left"})
+        app = App.get_running_app()
+        if app.jwt_token:
+            try:
+                requests.post(
+                    f"{app.SERVER_URL}/update_location",
+                    json={"lat": lat, "lon": lon},
+                    headers=headers_with_token(app.jwt_token),
+                    timeout=3,
+                    verify=False
+                )
+            except Exception as e:
+                logging.error(f"[MapScreen] update_location error: {e}")
 
-@app.route('/get_groups', methods=['GET'])
-@jwt_required()
-def get_groups():
-    user = User.query.get(get_jwt_identity())
-    return jsonify([g.to_json() for g in user.groups])
+        if app.route_handler.is_recording:
+            app.route_handler.add_point(lat, lon)
 
-@app.route('/rename_group', methods=['POST'])
-@jwt_required()
-def rename_group():
-    gid = request.json.get('group_id')
-    new_name = request.json.get('new_name')
-    group = Group.query.get(gid)
-    if group:
-        group.name = new_name
-        db.session.commit()
-    return jsonify({"status": "renamed"})
+    def auto_center_if_follow(self, dt):
+        if self.follow_user:
+            self.map_view.center_on(self.user_marker.lat, self.user_marker.lon)
 
-@app.route('/set_group_avatar', methods=['POST'])
-@jwt_required()
-def set_group_avatar():
-    gid = request.json.get('group_id')
-    img_data = request.json.get('avatar_base64')
-    group = Group.query.get(gid)
-    if group:
-        avatar = save_base64(img_data, 'jpg')
-        group.avatar = avatar
-        db.session.commit()
-    return jsonify({"status": "avatar_updated"})
+    def toggle_follow(self, *_):
+        self.follow_user = not self.follow_user
+        self.center_btn.background_color = (0, 1, 0, 0.6) if self.follow_user else (0.3, 0.3, 0.3, 0.6)
 
-# --- MESSAGES ---
-@app.route('/send_message', methods=['POST'])
-@jwt_required()
-def send_message():
-    user = get_jwt_identity()
-    data = request.form or request.json or {}
-    group_id = data.get('group_id')
-    receiver = data.get('receiver')
-    text = data.get('text', '')
-    audio = save_file('audio') or save_base64(data.get('audio', ''), 'wav')
-    photo = save_file('photo') or save_base64(data.get('photo', ''), 'jpg')
-    msg = Message(group_id=group_id, sender=user, receiver=receiver, text=text, audio=audio, photo=photo)
-    db.session.add(msg)
-    db.session.commit()
-    return jsonify({"message": "sent"})
+    def on_map_touch(self, instance, touch):
+        if touch.is_double_tap:
+            latlon = self.map_view.get_latlon_at(touch.x, touch.y)
+            if latlon:
+                self.map_view.center_on(*latlon)
+                self.map_view.zoom += 1
+            return True
+        return False
 
-@app.route('/get_messages', methods=['GET'])
-@jwt_required()
-def get_messages():
-    current = get_jwt_identity()
-    group_id = request.args.get('group_id')
-    receiver = request.args.get('receiver')
-    after_id = int(request.args.get('after_id', 0))
-    q = Message.query.filter(Message.id > after_id)
-    if group_id:
-        q = q.filter_by(group_id=group_id)
-    elif receiver:
-        q = q.filter(
-            ((Message.sender == current) & (Message.receiver == receiver)) |
-            ((Message.sender == receiver) & (Message.receiver == current))
-        ).filter(Message.group_id == None)
-    else:
-        return jsonify([])
-    messages = q.order_by(Message.id).all()
-    return jsonify([{
-        "id": m.id,
-        "from": m.sender,
-        "to": m.receiver,
-        "text": m.text,
-        "photo": m.photo,
-        "audio": m.audio,
-        "is_read": m.is_read,
-        "created_at": m.created_at.isoformat()
-    } for m in messages])
+    def update_other_users(self, dt):
+        app = App.get_running_app()
+        if not app.jwt_token:
+            return
+        try:
+            r = requests.get(
+                f"{app.SERVER_URL}/get_users",
+                headers=headers_with_token(app.jwt_token),
+                timeout=3,
+                verify=False
+            )
+            if r.status_code != 200:
+                return
+            data = r.json()
+            new_users = []
+            my_lat, my_lon = self.user_marker.lat, self.user_marker.lon
+            for u in data:
+                if u["username"] == app.username:
+                    continue
+                dist = self._dist_km(my_lat, my_lon, u["lat"], u["lon"])
+                if dist <= app.user_display_radius:
+                    new_users.append(u["username"])
+                    if u["username"] in self.other_markers:
+                        mk = self.other_markers[u["username"]]
+                        mk.lat = u["lat"]
+                        mk.lon = u["lon"]
+                    else:
+                        mk = MapMarker(lat=u["lat"], lon=u["lon"])
+                        self.other_markers[u["username"]] = mk
+                        self.map_view.add_widget(mk)
+            for uname in list(self.other_markers.keys()):
+                if uname not in new_users:
+                    self.map_view.remove_widget(self.other_markers[uname])
+                    del self.other_markers[uname]
+        except Exception as e:
+            logging.error(f"[MapScreen] update_other_users: {e}")
 
-@app.route('/delete_message', methods=['POST'])
-@jwt_required()
-def delete_message():
-    mid = request.json.get('message_id')
-    msg = Message.query.get(mid)
-    if msg and msg.sender == get_jwt_identity():
-        db.session.delete(msg)
-        db.session.commit()
-        return jsonify({"status": "deleted"})
-    return jsonify({"error": "not found or not permitted"}), 404
+    def _dist_km(self, lat1, lon1, lat2, lon2):
+        R = 6371
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * \
+            math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c
 
-# --- ROUTES ---
-@app.route('/upload_route', methods=['POST'])
-@jwt_required()
-def upload_route():
-    current = get_jwt_identity()
-    data = request.json
-    rid = str(uuid.uuid4())
-    r = Route(id=rid, name=data.get('route_name', 'Route'), username=current, distance=data.get('distance', 0.0))
-    db.session.add(r)
-    db.session.commit()
-    for p in data.get('route_points', []):
-        db.session.add(RoutePoint(route_id=rid, lat=p['lat'], lon=p['lon']))
-    for c in data.get('route_comments', []):
-        photo = c.get('photo')
-        photo_name = save_base64(photo, 'jpg') if photo else None
-        db.session.add(RouteComment(
-            route_id=rid, lat=c['lat'], lon=c['lon'],
-            text=c['text'], time=c['time'], photo=photo_name
-        ))
-    db.session.commit()
-    return jsonify({"status": "uploaded"})
+    def add_comment_with_photo(self, *_):
+        app = App.get_running_app()
+        lat, lon = self.user_marker.lat, self.user_marker.lon
 
-@app.route('/get_routes', methods=['GET'])
-@jwt_required()
-def get_routes():
-    routes = Route.query.order_by(Route.created_at.desc()).all()
-    resp = []
-    for r in routes:
-        comments = RouteComment.query.filter_by(route_id=r.id).all()
-        resp.append({
-            "name": r.name,
-            "distance": r.distance,
-            "date": r.created_at.strftime("%Y-%m-%d %H:%M"),
-            "comments": [{
-                "lat": c.lat, "lon": c.lon,
-                "text": c.text, "time": c.time,
-                "photo": c.photo
-            } for c in comments]
-        })
-    return jsonify(resp)
+        def save_comment(text, photo_path):
+            app.route_handler.add_comment(lat, lon, text, photo_path)
 
-@app.route('/sos', methods=['POST'])
-@jwt_required()
-def sos():
-    user = get_jwt_identity()
-    data = request.json
-    logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
-    return jsonify({"message": "SOS received"})
+        def on_comment_entered(text, *_):
+            try:
+                photo_path = f"sos_photo_{int(lat * 10000)}_{int(lon * 10000)}.jpg"
+                camera.take_picture(filename=photo_path, on_complete=lambda _: save_comment(text, photo_path))
+            except Exception as e:
+                logging.warning("Камера недоступна: %s", e)
+                save_comment(text, None)
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+        create_comment_popup(callback=on_comment_entered)
+
+    def open_sos_form(self, *_):
+        lat, lon = self.user_marker.lat, self.user_marker.lon
+        SosFormPopup(lat, lon).open()
+
+    def on_group_btn(self, *_):
+        app = App.get_running_app()
+        if not app.jwt_token:
+            show_info("Нет доступа. Войдите в аккаунт.")
+            return
+        if app.group_chat_handler and app.group_chat_handler.is_in_group():
+            from ui.group_chat_overlay import GroupChatOverlay
+            GroupChatOverlay().open()
+        else:
+            from ui.group_choose_overlay import GroupChooseOverlay
+            overlay = GroupChooseOverlay(after_join_callback=self._on_join_group)
+            overlay.open()
+
+    def _on_join_group(self, success, _):
+        if success:
+            from ui.group_chat_overlay import GroupChatOverlay
+            GroupChatOverlay().open()
+
+    def load_route_overlay(self, route):
+        if route.get("route_points"):
+            with self.map_view.canvas.after:
+                Color(0, 0, 1, 1)
+                points = [(pt["lon"], pt["lat"]) for pt in route["route_points"]]
+                if points:
+                    line = Line(points=sum(points, ()), width=2)
+                    self.route_overlay_instructions.add(line)
+            self.map_view.canvas.after.add(self.route_overlay_instructions)
+
+            for pt in [route["route_points"][0], route["route_points"][-1]]:
+                mk = MapMarker(lat=pt["lat"], lon=pt["lon"])
+                self.route_overlay_widgets.append(mk)
+                self.map_view.add_widget(mk)
+
+        for c in route.get("route_comments", []):
+            mk = MapMarker(lat=c["lat"], lon=c["lon"])
+            self.map_view.add_widget(mk)
+            self.route_overlay_widgets.append(mk)
+
+        if not self.clear_overlay_btn:
+            self.clear_overlay_btn = Button(
+                text="Снять маршрут",
+                size_hint=(None, None),
+                size=(dp(120), dp(40)),
+                pos_hint={"x": 0.02, "y": 0.1},
+                background_color=(1, 1, 0, 0.8),
+                color=(0, 0, 0, 1)
+            )
+            self.clear_overlay_btn.bind(on_press=self.clear_route_overlay)
+            self.main_layout.add_widget(self.clear_overlay_btn)
+
+    def clear_route_overlay(self, *_):
+        app = App.get_running_app()
+        app.clear_route_overlay()
+
+        for w in self.route_overlay_widgets:
+            try:
+                self.map_view.remove_widget(w)
+            except Exception:
+                pass
+        self.route_overlay_widgets.clear()
+
+        if self.clear_overlay_btn:
+            self.main_layout.remove_widget(self.clear_overlay_btn)
+            self.clear_overlay_btn = None
+
+        self.map_view.canvas.after.remove(self.route_overlay_instructions)
+        self.route_overlay_instructions = InstructionGroup()
