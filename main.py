@@ -28,13 +28,13 @@ logging.basicConfig(level=logging.DEBUG)
 
 # --- MODELS ---
 ignored_users = db.Table('ignored_users',
-    db.Column('user', db.String(80), db.ForeignKey('user.username')),
-    db.Column('ignored', db.String(80), db.ForeignKey('user.username'))
+    db.Column('user', db.String(80), db.ForeignKey('user.username', name='fk_ignore_user')),
+    db.Column('ignored', db.String(80), db.ForeignKey('user.username', name='fk_ignore_ignored'))
 )
 
 group_members = db.Table('group_members',
-    db.Column('group_id', db.String(36), db.ForeignKey('group.id')),
-    db.Column('username', db.String(80), db.ForeignKey('user.username'))
+    db.Column('group_id', db.String(36), db.ForeignKey('group.id', name='fk_group_id')),
+    db.Column('username', db.String(80), db.ForeignKey('user.username', name='fk_group_username'))
 )
 
 class User(db.Model):
@@ -71,7 +71,7 @@ class Group(db.Model):
 class Message(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     group_id = db.Column(db.String(36), nullable=True)
-    sender = db.Column(db.String(80), db.ForeignKey('user.username'))
+    sender = db.Column(db.String(80), db.ForeignKey('user.username', name='fk_msg_sender'))
     receiver = db.Column(db.String(80), nullable=True)
     text = db.Column(db.Text, default="")
     audio = db.Column(db.String(200))
@@ -82,19 +82,19 @@ class Message(db.Model):
 class Route(db.Model):
     id = db.Column(db.String(36), primary_key=True)
     name = db.Column(db.String(120))
-    username = db.Column(db.String(80), db.ForeignKey('user.username'))
+    username = db.Column(db.String(80), db.ForeignKey('user.username', name='fk_route_username'))
     distance = db.Column(db.Float)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class RoutePoint(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
+    route_id = db.Column(db.String(36), db.ForeignKey('route.id', name='fk_point_route'))
     lat = db.Column(db.Float)
     lon = db.Column(db.Float)
 
 class RouteComment(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey('route.id'))
+    route_id = db.Column(db.String(36), db.ForeignKey('route.id', name='fk_comment_route'))
     lat = db.Column(db.Float)
     lon = db.Column(db.Float)
     text = db.Column(db.Text)
@@ -154,8 +154,6 @@ def login():
 @jwt_required()
 def update_location():
     user = User.query.get(get_jwt_identity())
-    if not user:
-        return jsonify({"error": "User not found"}), 404
     data = request.json
     user.lat = data['lat']
     user.lon = data['lon']
@@ -167,8 +165,6 @@ def update_location():
 def get_users():
     current = get_jwt_identity()
     user = User.query.get(current)
-    if not user:
-        return jsonify([])
     all_users = User.query.all()
     return jsonify([u.to_json() for u in all_users if u.username not in [i.username for i in user.ignored]])
 
@@ -229,14 +225,8 @@ def leave_group():
 @app.route('/get_groups', methods=['GET'])
 @jwt_required()
 def get_groups():
-    try:
-        user = User.query.get(get_jwt_identity())
-        if not user:
-            return jsonify([])
-        return jsonify([g.to_json() for g in user.groups])
-    except Exception as e:
-        logging.exception("Ошибка при получении групп")
-        return jsonify({"error": "internal"}), 500
+    user = User.query.get(get_jwt_identity())
+    return jsonify([g.to_json() for g in user.groups])
 
 @app.route('/rename_group', methods=['POST'])
 @jwt_required()
