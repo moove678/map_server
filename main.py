@@ -14,7 +14,7 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key')
 app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-jwt-key')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite').replace("postgres://", "postgresql://")
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///mydb.sqlite')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -27,7 +27,6 @@ migrate = Migrate(app, db)
 logging.basicConfig(level=logging.DEBUG)
 
 # --- MODELS ---
-
 ignored_users = db.Table('ignored_users',
     db.Column('user', db.String(80), db.ForeignKey('user.username')),
     db.Column('ignored', db.String(80), db.ForeignKey('user.username'))
@@ -103,7 +102,6 @@ class RouteComment(db.Model):
     photo = db.Column(db.String(200))
 
 # --- HELPERS ---
-
 def save_file(field):
     if field not in request.files:
         return None
@@ -131,7 +129,6 @@ def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # --- AUTH ---
-
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -153,11 +150,12 @@ def login():
     return jsonify({"access_token": token}), 200
 
 # --- USERS ---
-
 @app.route('/update_location', methods=['POST'])
 @jwt_required()
 def update_location():
     user = User.query.get(get_jwt_identity())
+    if not user:
+        return jsonify({"error": "User not found"}), 404
     data = request.json
     user.lat = data['lat']
     user.lon = data['lon']
@@ -169,6 +167,8 @@ def update_location():
 def get_users():
     current = get_jwt_identity()
     user = User.query.get(current)
+    if not user:
+        return jsonify([])
     all_users = User.query.all()
     return jsonify([u.to_json() for u in all_users if u.username not in [i.username for i in user.ignored]])
 
@@ -184,7 +184,6 @@ def ignore_user():
     return jsonify({"ignored": target})
 
 # --- GROUPS ---
-
 @app.route('/create_group', methods=['POST'])
 @jwt_required()
 def create_group():
@@ -232,6 +231,8 @@ def leave_group():
 def get_groups():
     try:
         user = User.query.get(get_jwt_identity())
+        if not user:
+            return jsonify([])
         return jsonify([g.to_json() for g in user.groups])
     except Exception as e:
         logging.exception("Ошибка при получении групп")
@@ -261,7 +262,6 @@ def set_group_avatar():
     return jsonify({"status": "avatar_updated"})
 
 # --- MESSAGES ---
-
 @app.route('/send_message', methods=['POST'])
 @jwt_required()
 def send_message():
@@ -321,7 +321,6 @@ def delete_message():
     return jsonify({"error": "not found or not permitted"}), 404
 
 # --- ROUTES ---
-
 @app.route('/upload_route', methods=['POST'])
 @jwt_required()
 def upload_route():
