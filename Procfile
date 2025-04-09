@@ -1,2 +1,1 @@
-release: python manage.py db upgrade
-web: gunicorn main:app
+web: bash start.sh
