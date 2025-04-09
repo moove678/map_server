@@ -9,14 +9,17 @@ from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from flask_migrate import Migrate
+from flask_migrate import Migrate, upgrade
 from werkzeug.security import generate_password_hash, check_password_hash
+from dotenv import load_dotenv
 
 # --- CONFIG ---
+load_dotenv()
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = '2311'
 app.config['JWT_SECRET_KEY'] = 'jwt2311'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:RsGDMwzawhXqgzwniLFsIOYeONBQrpEX@postgres.railway.internal:5432/railway'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -142,7 +145,7 @@ def dist_km(lat1, lon1, lat2, lon2):
     a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
     return R * 2 * atan2(sqrt(a), sqrt(1 - a))
 
-@app.route('/uploads/')
+@app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
@@ -345,3 +348,9 @@ def sos():
     data = request.json
     logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
     return jsonify({"message": "SOS received"})
+
+# --- MAIN ---
+if __name__ == '__main__':
+    with app.app_context():
+        upgrade()
+    app.run(debug=True, host='0.0.0.0', port=5000)
