@@ -1,1 +1,1 @@
-web: pyhton main.py
+web: pyhton manage.py db upgrade && python main.py
