@@ -1,27 +1,26 @@
 import os
 import uuid
-import logging
 import base64
 import time
+import logging
+from math import radians, sin, cos, sqrt, atan2
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
-from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-#
+from werkzeug.security import generate_password_hash, check_password_hash
+
 # --- CONFIG ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY", "2311")
-app.config['JWT_SECRET_KEY'] = os.environ.get("JWT_SECRET_KEY", "jwt2311")
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "postgresql://postgres:RsGDMwzawhXqgzwniLFsIOYeONBQrpEX@postgres.railway.internal:5432/railway").replace("postgres://", "postgresql://")
+app.config['SECRET_KEY'] = '2311'
+app.config['JWT_SECRET_KEY'] = 'jwt2311'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:RsGDMwzawhXqgzwniLFsIOYeONBQrpEX@postgres.railway.internal:5432/railway'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 db = SQLAlchemy(app)
-migrate = Migrate(app, db)
 jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
@@ -49,7 +48,6 @@ class User(db.Model):
         secondaryjoin=username == ignored_users.c.ignored,
         backref='ignored_by'
     )
-
     def to_json(self):
         return {
             "username": self.username,
@@ -65,7 +63,6 @@ class Group(db.Model):
     owner = db.Column(db.String(80))
     avatar = db.Column(db.String(200))
     members = db.relationship("User", secondary=group_members, backref="groups")
-
     def to_json(self):
         return {
             "id": self.id,
@@ -135,6 +132,13 @@ def save_base64(data, ext):
         logging.error(f"[Base64 error] {e}")
         return None
 
+def dist_km(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = radians(lat2 - lat1)
+    dlon = radians(lon2 - lon1)
+    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
+    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
+
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
@@ -186,19 +190,9 @@ def get_users():
             continue
         if now - u.last_seen > 30:
             continue
-        result.append(u.to_json())
+        if dist_km(user.lat, user.lon, u.lat, u.lon) <= radius:
+            result.append(u.to_json())
     return jsonify(result)
-
-@app.route('/ignore_user', methods=['POST'])
-@jwt_required()
-def ignore_user():
-    user = User.query.get(get_jwt_identity())
-    target = request.json.get('username')
-    target_user = User.query.get(target)
-    if target_user and target_user not in user.ignored:
-        user.ignored.append(target_user)
-        db.session.commit()
-    return jsonify({"ignored": target})
 
 # --- GROUPS ---
 @app.route('/create_group', methods=['POST'])
@@ -218,6 +212,11 @@ def create_group():
 def get_groups():
     user = User.query.get(get_jwt_identity())
     return jsonify([g.to_json() for g in user.groups])
+
+@app.route('/get_all_groups', methods=['GET'])
+@jwt_required()
+def get_all_groups():
+    return jsonify([g.to_json() for g in Group.query.all()])
 
 @app.route('/join_group', methods=['POST'])
 @jwt_required()
@@ -286,6 +285,7 @@ def get_messages():
         "text": m.text,
         "photo": m.photo,
         "audio": m.audio,
+        "is_read": m.is_read,
         "created_at": m.created_at.isoformat()
     } for m in messages])
 
@@ -299,17 +299,17 @@ def upload_route():
     r = Route(id=rid, name=data.get('route_name', 'Route'), username=current, distance=data.get('distance', 0.0))
     db.session.add(r)
     db.session.commit()
-    for p in data.get("route_points", []):
-        db.session.add(RoutePoint(route_id=rid, lat=p["lat"], lon=p["lon"]))
-    for c in data.get("route_comments", []):
-        photo = c.get("photo")
+    for p in data.get('route_points', []):
+        db.session.add(RoutePoint(route_id=rid, lat=p['lat'], lon=p['lon']))
+    for c in data.get('route_comments', []):
+        photo = c.get('photo')
         db.session.add(RouteComment(
             route_id=rid,
-            lat=c["lat"],
-            lon=c["lon"],
-            text=c["text"],
-            time=c["time"],
-            photo=save_base64(photo, "jpg") if photo else None
+            lat=c['lat'],
+            lon=c['lon'],
+            text=c['text'],
+            time=c['time'],
+            photo=save_base64(photo, 'jpg') if photo else None
         ))
     db.session.commit()
     return jsonify({"status": "uploaded"})
@@ -335,15 +335,16 @@ def get_routes():
         })
     return jsonify(resp)
 
-# --- SOS ---
 @app.route('/sos', methods=['POST'])
 @jwt_required()
 def sos():
     user = get_jwt_identity()
     data = request.json
-    logging.warning(f"SOS from {user}: {data}")
+    logging.warning(f"SOS from {user}: lat={data.get('lat')}, lon={data.get('lon')}")
     return jsonify({"message": "SOS received"})
 
 # --- MAIN ---
 if __name__ == '__main__':
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True, host='0.0.0.0', port=5000)
