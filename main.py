@@ -1,9 +1,8 @@
 import os
 import uuid
-import time
-import base64
 import logging
-from math import radians, sin, cos, sqrt, atan2
+import base64
+import time
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
@@ -13,9 +12,9 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 
 # --- CONFIG ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'secret'
-app.config['JWT_SECRET_KEY'] = 'jwt-secret'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///mydb.db'
+app.config['SECRET_KEY'] = os.environ.get("SECRET_KEY", "2311")
+app.config['JWT_SECRET_KEY'] = os.environ.get("JWT_SECRET_KEY", "jwt2311")
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get("DATABASE_URL", "postgresql://postgres:RsGDMwzawhXqgzwniLFsIOYeONBQrpEX@postgres.railway.internal:5432/railway").replace("postgres://", "postgresql://")
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -136,13 +135,6 @@ def save_base64(data, ext):
         logging.error(f"[Base64 error] {e}")
         return None
 
-def dist_km(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat/2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon/2)**2
-    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
-
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
@@ -194,9 +186,19 @@ def get_users():
             continue
         if now - u.last_seen > 30:
             continue
-        if dist_km(user.lat, user.lon, u.lat, u.lon) <= radius:
-            result.append(u.to_json())
+        result.append(u.to_json())
     return jsonify(result)
+
+@app.route('/ignore_user', methods=['POST'])
+@jwt_required()
+def ignore_user():
+    user = User.query.get(get_jwt_identity())
+    target = request.json.get('username')
+    target_user = User.query.get(target)
+    if target_user and target_user not in user.ignored:
+        user.ignored.append(target_user)
+        db.session.commit()
+    return jsonify({"ignored": target})
 
 # --- GROUPS ---
 @app.route('/create_group', methods=['POST'])
@@ -277,17 +279,15 @@ def get_messages():
     else:
         return jsonify([])
     messages = q.order_by(Message.id).all()
-    return jsonify([
-        {
-            "id": m.id,
-            "from": m.sender,
-            "to": m.receiver,
-            "text": m.text,
-            "photo": m.photo,
-            "audio": m.audio,
-            "created_at": m.created_at.isoformat()
-        } for m in messages
-    ])
+    return jsonify([{
+        "id": m.id,
+        "from": m.sender,
+        "to": m.receiver,
+        "text": m.text,
+        "photo": m.photo,
+        "audio": m.audio,
+        "created_at": m.created_at.isoformat()
+    } for m in messages])
 
 # --- ROUTES ---
 @app.route('/upload_route', methods=['POST'])
