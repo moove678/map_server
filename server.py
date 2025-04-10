@@ -1,26 +1,37 @@
 import os
 import uuid
-import time
-import base64
 import logging
-from math import radians, sin, cos, sqrt, atan2
+import base64
+import time
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from dotenv import load_dotenv
+
+# --- LOAD ENV ---
+load_dotenv()
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
 
 # --- CONFIG ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'dev-secret-key'
-app.config['JWT_SECRET_KEY'] = 'dev-jwt-key'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:RsGDMwzawhXqgzwniLFsIOYeONBQrpEX@postgres.railway.internal:5432/railway'
+app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "supersecret")
+app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "jwtsecret")
+app.config['SQLALCHEMY_DATABASE_URI'] = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# --- INIT ---
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
@@ -46,10 +57,15 @@ class User(db.Model):
         'User', secondary=ignored_users,
         primaryjoin=username == ignored_users.c.user,
         secondaryjoin=username == ignored_users.c.ignored,
-        backref='ignored_by'
-    )
+        backref='ignored_by')
+
     def to_json(self):
-        return {"username": self.username, "lat": self.lat, "lon": self.lon, "last_seen": self.last_seen}
+        return {
+            "username": self.username,
+            "lat": self.lat,
+            "lon": self.lon,
+            "last_seen": self.last_seen
+        }
 
 class Group(db.Model):
     __tablename__ = 'groups'
@@ -58,6 +74,7 @@ class Group(db.Model):
     owner = db.Column(db.String(80))
     avatar = db.Column(db.String(200))
     members = db.relationship("User", secondary=group_members, backref="groups")
+
     def to_json(self):
         return {
             "id": self.id,
@@ -127,14 +144,7 @@ def save_base64(data, ext):
         logging.error(f"[Base64 error] {e}")
         return None
 
-def dist_km(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = radians(lat2 - lat1)
-    dlon = radians(lon2 - lon1)
-    a = sin(dlat / 2)**2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2)**2
-    return R * 2 * atan2(sqrt(a), sqrt(1 - a))
-
-@app.route('/uploads/<filename>')
+@app.route('/uploads/')
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
@@ -148,7 +158,7 @@ def register():
     user = User(username=data['username'], password=hashed)
     db.session.add(user)
     db.session.commit()
-    return jsonify({"message": "registered"}), 200
+    return jsonify({"message": "registered"})
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -157,97 +167,17 @@ def login():
     if not user or not check_password_hash(user.password, data['password']):
         return jsonify({"error": "invalid"}), 401
     token = create_access_token(identity=user.username)
-    return jsonify({"access_token": token}), 200
+    return jsonify({"access_token": token})
 
-# --- USERS ---
-@app.route('/update_location', methods=['POST'])
+# --- SOS ---
+@app.route('/sos', methods=['POST'])
 @jwt_required()
-def update_location():
-    user = User.query.get(get_jwt_identity())
+def sos():
+    user = get_jwt_identity()
     data = request.json
-    user.lat = data['lat']
-    user.lon = data['lon']
-    user.last_seen = time.time()
-    db.session.commit()
-    return jsonify({"status": "ok"})
-
-@app.route('/get_users', methods=['GET'])
-@jwt_required()
-def get_users():
-    current = get_jwt_identity()
-    user = User.query.get(current)
-    all_users = User.query.all()
-    radius = float(request.args.get("radius_km", 5))
-    now = time.time()
-    result = []
-    for u in all_users:
-        if u.username == current or u.username in [i.username for i in user.ignored]:
-            continue
-        if now - u.last_seen > 30:
-            continue
-        if dist_km(user.lat, user.lon, u.lat, u.lon) <= radius:
-            result.append(u.to_json())
-    return jsonify(result)
-
-@app.route('/ignore_user', methods=['POST'])
-@jwt_required()
-def ignore_user():
-    user = User.query.get(get_jwt_identity())
-    target = request.json.get('username')
-    target_user = User.query.get(target)
-    if target_user and target_user not in user.ignored:
-        user.ignored.append(target_user)
-        db.session.commit()
-    return jsonify({"ignored": target})
-
-# --- GROUPS ---
-@app.route('/create_group', methods=['POST'])
-@jwt_required()
-def create_group():
-    current = get_jwt_identity()
-    name = request.json.get('name')
-    gid = str(uuid.uuid4())
-    g = Group(id=gid, name=name, owner=current)
-    g.members.append(User.query.get(current))
-    db.session.add(g)
-    db.session.commit()
-    return jsonify({"group_id": gid})
-
-@app.route('/get_groups', methods=['GET'])
-@jwt_required()
-def get_groups():
-    user = User.query.get(get_jwt_identity())
-    return jsonify([g.to_json() for g in user.groups])
-
-@app.route('/get_all_groups', methods=['GET'])
-@jwt_required()
-def get_all_groups():
-    return jsonify([g.to_json() for g in Group.query.all()])
-
-@app.route('/join_group', methods=['POST'])
-@jwt_required()
-def join_group():
-    user = User.query.get(get_jwt_identity())
-    gid = request.json.get('group_id')
-    g = Group.query.get(gid)
-    if g and user not in g.members:
-        g.members.append(user)
-        db.session.commit()
-    return jsonify({"status": "joined"})
-
-@app.route('/leave_group', methods=['POST'])
-@jwt_required()
-def leave_group():
-    user = User.query.get(get_jwt_identity())
-    gid = request.json.get('group_id')
-    g = Group.query.get(gid)
-    if g and user in g.members:
-        g.members.remove(user)
-        if not g.members:
-            db.session.delete(g)
-        db.session.commit()
-    return jsonify({"status": "left"})
+    logging.warning(f"SOS from {user}: {data}")
+    return jsonify({"message": "SOS received"})
 
 # --- MAIN ---
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5000)
