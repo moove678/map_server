@@ -13,6 +13,7 @@ from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required,
     get_jwt_identity, get_jwt
 )
+from flask_cors import CORS
 from dotenv import load_dotenv
 
 # -------------------------------------------------------------
@@ -21,6 +22,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
+
 app.config.update(
     SECRET_KEY=os.getenv("SECRET_KEY", "supersecret"),
     JWT_SECRET_KEY=os.getenv("JWT_SECRET_KEY", "jwtsecret"),
@@ -55,17 +58,16 @@ group_members = db.Table(
     db.Column("username", db.String(80), db.ForeignKey("users.username")),
 )
 
-
 class User(db.Model):
     __tablename__ = "users"
-    username      = db.Column(db.String(80), primary_key=True)
-    password      = db.Column(db.String(200), nullable=False)
-    lat           = db.Column(db.Float, default=0.0)
-    lon           = db.Column(db.Float, default=0.0)
-    last_seen     = db.Column(db.Float, default=lambda: time.time())
-    current_token = db.Column(db.String(500))
-    current_device= db.Column(db.String(100))
-    ignored       = db.relationship(
+    username       = db.Column(db.String(80), primary_key=True)
+    password       = db.Column(db.String(200), nullable=False)
+    lat            = db.Column(db.Float, default=0.0)
+    lon            = db.Column(db.Float, default=0.0)
+    last_seen      = db.Column(db.Float, default=lambda: time.time())
+    current_token  = db.Column(db.String(500))
+    current_device = db.Column(db.String(100))
+    ignored        = db.relationship(
         "User",
         secondary=ignored_users,
         primaryjoin=username == ignored_users.c.user,
@@ -80,7 +82,6 @@ class User(db.Model):
             "lon": self.lon,
             "last_seen": self.last_seen,
         }
-
 
 class Group(db.Model):
     __tablename__ = "groups"
@@ -99,7 +100,6 @@ class Group(db.Model):
             "members": [m.username for m in self.members],
         }
 
-
 class Message(db.Model):
     __tablename__ = "messages"
     id         = db.Column(db.Integer, primary_key=True)
@@ -112,36 +112,8 @@ class Message(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     is_read    = db.Column(db.Boolean, default=False)
 
-
-class Route(db.Model):
-    __tablename__ = "routes"
-    id        = db.Column(db.String(36), primary_key=True)
-    name      = db.Column(db.String(120))
-    username  = db.Column(db.String(80), db.ForeignKey("users.username"))
-    distance  = db.Column(db.Float)
-    created_at= db.Column(db.DateTime, default=datetime.utcnow)
-
-
-class RoutePoint(db.Model):
-    __tablename__ = "route_points"
-    id      = db.Column(db.Integer, primary_key=True)
-    route_id= db.Column(db.String(36), db.ForeignKey("routes.id"))
-    lat     = db.Column(db.Float)
-    lon     = db.Column(db.Float)
-
-
-class RouteComment(db.Model):
-    __tablename__ = "route_comments"
-    id      = db.Column(db.Integer, primary_key=True)
-    route_id= db.Column(db.String(36), db.ForeignKey("routes.id"))
-    lat     = db.Column(db.Float)
-    lon     = db.Column(db.Float)
-    text    = db.Column(db.Text)
-    time    = db.Column(db.String(50))
-    photo   = db.Column(db.String(200))
-
 # -------------------------------------------------------------
-#  AUTH HELPERS
+#  HELPERS
 # -------------------------------------------------------------
 def single_device_required(fn):
     @wraps(fn)
@@ -156,7 +128,7 @@ def single_device_required(fn):
     return wrapper
 
 # -------------------------------------------------------------
-#  AUTH ROUTES
+#  AUTH
 # -------------------------------------------------------------
 @app.route("/register", methods=["POST"])
 def register():
@@ -202,7 +174,7 @@ def logout():
     return jsonify({"message": "logged out"})
 
 # -------------------------------------------------------------
-#  USER LOCATION & LISTING
+#  LOCATION & USERS
 # -------------------------------------------------------------
 @app.route("/update_location", methods=["POST"])
 @jwt_required()
@@ -221,8 +193,8 @@ def update_location():
 @single_device_required
 def get_users():
     current = get_jwt_identity()
-    user    = User.query.get(current)
-    now     = time.time()
+    user = User.query.get(current)
+    now = time.time()
     visible = []
     for u in User.query.all():
         if u.username == current or u.username in [i.username for i in user.ignored]:
@@ -233,44 +205,21 @@ def get_users():
     return jsonify(visible)
 
 # -------------------------------------------------------------
-#  IGNORE & SOS
-# -------------------------------------------------------------
-@app.route("/ignore_user", methods=["POST"])
-@jwt_required()
-@single_device_required
-def ignore_user():
-    user   = User.query.get(get_jwt_identity())
-    target = request.json.get("username")
-    target_user = User.query.get(target)
-    if target_user and target_user not in user.ignored:
-        user.ignored.append(target_user)
-        db.session.commit()
-    return jsonify({"ignored": target})
-
-@app.route("/sos", methods=["POST"])
-@jwt_required()
-@single_device_required
-def sos():
-    sender = get_jwt_identity()
-    logging.warning(f"SOS from {sender}: {request.json}")
-    return jsonify({"message": "SOS received"})
-
-# -------------------------------------------------------------
-#  CHAT ROUTES
+#  CHAT
 # -------------------------------------------------------------
 @app.route("/send_message", methods=["POST"])
 @jwt_required()
 @single_device_required
 def send_message():
-    data   = request.json
+    data = request.json
     sender = get_jwt_identity()
     msg = Message(
-        group_id = data.get("group_id"),
-        sender   = sender,
-        receiver = data.get("receiver"),
-        text     = data.get("text", ""),
-        audio    = data.get("audio"),
-        photo    = data.get("photo"),
+        group_id=data.get("group_id"),
+        sender=sender,
+        receiver=data.get("receiver"),
+        text=data.get("text", ""),
+        audio=data.get("audio"),
+        photo=data.get("photo"),
     )
     db.session.add(msg)
     db.session.commit()
@@ -282,20 +231,41 @@ def send_message():
 def get_messages():
     group_id = request.args.get("group_id")
     messages = Message.query.filter_by(group_id=group_id).order_by(Message.created_at.asc()).all()
-    return jsonify([
-        {
-            "id"        : m.id,
-            "sender"    : m.sender,
-            "receiver"  : m.receiver,
-            "text"      : m.text,
-            "audio"     : m.audio,
-            "photo"     : m.photo,
-            "created_at": m.created_at.isoformat()
-        } for m in messages
-    ])
+    return jsonify([{
+        "id": m.id,
+        "sender": m.sender,
+        "receiver": m.receiver,
+        "text": m.text,
+        "audio": m.audio,
+        "photo": m.photo,
+        "created_at": m.created_at.isoformat()
+    } for m in messages])
 
 # -------------------------------------------------------------
-#  FILE UPLOADS
+#  SOS & IGNORES
+# -------------------------------------------------------------
+@app.route("/sos", methods=["POST"])
+@jwt_required()
+@single_device_required
+def sos():
+    sender = get_jwt_identity()
+    logging.warning(f"SOS from {sender}: {request.json}")
+    return jsonify({"message": "SOS received"})
+
+@app.route("/ignore_user", methods=["POST"])
+@jwt_required()
+@single_device_required
+def ignore_user():
+    user = User.query.get(get_jwt_identity())
+    target = request.json.get("username")
+    target_user = User.query.get(target)
+    if target_user and target_user not in user.ignored:
+        user.ignored.append(target_user)
+        db.session.commit()
+    return jsonify({"ignored": target})
+
+# -------------------------------------------------------------
+#  FILES
 # -------------------------------------------------------------
 @app.route("/uploads/<filename>")
 def serve_upload(filename):
