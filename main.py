@@ -133,6 +133,16 @@ def save_base64(data, ext):
         logging.error(f"[Base64 Error] {e}")
         return None
 
+def save_uploaded_file(file_storage, ext):
+    try:
+        filename = f"{uuid.uuid4()}.{ext}"
+        path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        file_storage.save(path)
+        return filename
+    except Exception as e:
+        logging.error(f"[File Save Error] {e}")
+        return None
+
 @app.route("/uploads/<filename>")
 def serve_upload(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
@@ -228,15 +238,41 @@ def sos():
 @jwt_required()
 @single_device_required
 def send_message():
-    data = request.json
     sender = get_jwt_identity()
+    group_id = None
+    receiver = None
+    text = ""
+    audio_filename = None
+    photo_filename = None
+
+    # Если запрос отправлен как multipart/form-data
+    if request.content_type.startswith("multipart/form-data"):
+        form_data = request.form
+        group_id = form_data.get("group_id")
+        receiver = form_data.get("receiver")
+        text = form_data.get("text", "")
+        if "audio" in request.files:
+            # Можно определить расширение по типу файла или указать явное, здесь "wav" используется как пример
+            audio_filename = save_uploaded_file(request.files["audio"], "wav")
+        if "photo" in request.files:
+            # Используем "jpg" как пример; при необходимости можно определить динамически
+            photo_filename = save_uploaded_file(request.files["photo"], "jpg")
+    else:
+        # Если запрос приходит в JSON-формате
+        data = request.json
+        group_id = data.get("group_id")
+        receiver = data.get("receiver")
+        text = data.get("text", "")
+        audio_filename = data.get("audio")
+        photo_filename = data.get("photo")
+
     msg = Message(
-        group_id=data.get("group_id"),
+        group_id=group_id,
         sender=sender,
-        receiver=data.get("receiver"),
-        text=data.get("text", ""),
-        audio=data.get("audio"),
-        photo=data.get("photo"),
+        receiver=receiver,
+        text=text,
+        audio=audio_filename,
+        photo=photo_filename,
     )
     db.session.add(msg)
     db.session.commit()
