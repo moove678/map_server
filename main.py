@@ -12,13 +12,10 @@ from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import (
     JWTManager, create_access_token, jwt_required,
-    get_jwt_identity, get_jwt
+    get_jwt_identity, get_jwt, decode_token
 )
 from dotenv import load_dotenv
 
-# -------------------------------------------------------------
-#  CONFIG & INITIALISATION
-# -------------------------------------------------------------
 load_dotenv()
 
 app = Flask(__name__)
@@ -35,46 +32,37 @@ app.config.update(
     UPLOAD_FOLDER=os.getenv("UPLOAD_FOLDER", "uploads"),
     ALLOW_NO_DEVICE=os.getenv("ALLOW_NO_DEVICE", "false").lower() == "true"
 )
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 logging.basicConfig(level=logging.INFO)
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 CORS(app)
 
-# -------------------------------------------------------------
-#  DATABASE MODELS
-# -------------------------------------------------------------
+# ---------------------- DATABASE MODELS ----------------------
 ignored_users = db.Table(
     "ignored_users",
     db.Column("user", db.String(80), db.ForeignKey("users.username")),
     db.Column("ignored", db.String(80), db.ForeignKey("users.username")),
 )
 
-group_members = db.Table(
-    "group_members",
-    db.Column("group_id", db.String(36), db.ForeignKey("groups.id")),
-    db.Column("username", db.String(80), db.ForeignKey("users.username")),
-)
-
 class User(db.Model):
     __tablename__ = "users"
-    username       = db.Column(db.String(80), primary_key=True)
-    password       = db.Column(db.String(200), nullable=False)
-    lat            = db.Column(db.Float, default=0.0)
-    lon            = db.Column(db.Float, default=0.0)
-    last_seen      = db.Column(db.Float, default=lambda: time.time())
-    current_token  = db.Column(db.String(500))
+    username = db.Column(db.String(80), primary_key=True)
+    password = db.Column(db.String(200), nullable=False)
+    lat = db.Column(db.Float, default=0.0)
+    lon = db.Column(db.Float, default=0.0)
+    last_seen = db.Column(db.Float, default=lambda: time.time())
+    current_token = db.Column(db.String(500))
     current_device = db.Column(db.String(100))
-    ignored        = db.relationship(
+    ignored = db.relationship(
         "User",
         secondary=ignored_users,
         primaryjoin=username == ignored_users.c.user,
         secondaryjoin=username == ignored_users.c.ignored,
         backref="ignored_by",
     )
-
     def to_json(self):
         return {
             "username": self.username,
@@ -83,70 +71,25 @@ class User(db.Model):
             "last_seen": self.last_seen,
         }
 
-class Group(db.Model):
-    __tablename__ = "groups"
-    id      = db.Column(db.String(36), primary_key=True)
-    name    = db.Column(db.String(120))
-    owner   = db.Column(db.String(80))
-    avatar  = db.Column(db.String(200))
-    members = db.relationship("User", secondary=group_members, backref="groups")
-
-    def to_json(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "owner": self.owner,
-            "avatar": self.avatar,
-            "members": [m.username for m in self.members],
-        }
-
 class Message(db.Model):
     __tablename__ = "messages"
-    id         = db.Column(db.Integer, primary_key=True)
-    group_id   = db.Column(db.String(36), db.ForeignKey("groups.id"))
-    sender     = db.Column(db.String(80), db.ForeignKey("users.username"))
-    receiver   = db.Column(db.String(80))
-    text       = db.Column(db.Text, default="")
-    audio      = db.Column(db.String(200))
-    photo      = db.Column(db.String(200))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    is_read    = db.Column(db.Boolean, default=False)
-
-class Route(db.Model):
-    __tablename__ = "routes"
-    id         = db.Column(db.String(36), primary_key=True)
-    name       = db.Column(db.String(120))
-    username   = db.Column(db.String(80), db.ForeignKey("users.username"))
-    distance   = db.Column(db.Float)
+    id = db.Column(db.Integer, primary_key=True)
+    group_id = db.Column(db.String(36))
+    sender = db.Column(db.String(80), db.ForeignKey("users.username"))
+    receiver = db.Column(db.String(80))
+    text = db.Column(db.Text, default="")
+    audio = db.Column(db.String(200))
+    photo = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-class RoutePoint(db.Model):
-    __tablename__ = "route_points"
-    id       = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey("routes.id"))
-    lat      = db.Column(db.Float)
-    lon      = db.Column(db.Float)
-
-class RouteComment(db.Model):
-    __tablename__ = "route_comments"
-    id       = db.Column(db.Integer, primary_key=True)
-    route_id = db.Column(db.String(36), db.ForeignKey("routes.id"))
-    lat      = db.Column(db.Float)
-    lon      = db.Column(db.Float)
-    text     = db.Column(db.Text)
-    time     = db.Column(db.String(50))
-    photo    = db.Column(db.String(200))
-
-# -------------------------------------------------------------
-#  HELPERS
-# -------------------------------------------------------------
+# ---------------------- HELPERS ----------------------
 def single_device_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if app.config["ALLOW_NO_DEVICE"]:
             return fn(*args, **kwargs)
         identity = get_jwt_identity()
-        jti = get_jwt()["jti"]
+        jti = get_jwt().get("jti")
         device = request.headers.get("X-Device-ID")
         user = User.query.get(identity)
         if not user or user.current_token != jti or user.current_device != device:
@@ -166,37 +109,45 @@ def save_base64(data, ext):
         logging.error(f"[Base64 Error] {e}")
         return None
 
-@app.route("/uploads/<filename>")
+@app.route("/uploads/")
 def serve_upload(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
-# -------------------------------------------------------------
-#  AUTH & USERS
-# -------------------------------------------------------------
+# ---------------------- AUTH ----------------------
 @app.route("/register", methods=["POST"])
 def register():
-    data = request.json
-    if User.query.get(data["username"]):
-        return jsonify({"error": "exists"}), 400
-    user = User(username=data["username"], password=generate_password_hash(data["password"]))
-    db.session.add(user)
-    db.session.commit()
-    return jsonify({"message": "registered"})
+    try:
+        data = request.json
+        if User.query.get(data["username"]):
+            return jsonify({"error": "exists"}), 400
+        user = User(username=data["username"], password=generate_password_hash(data["password"]))
+        db.session.add(user)
+        db.session.commit()
+        return jsonify({"message": "registered"})
+    except Exception as e:
+        logging.error(f"[Register Error] {e}")
+        return jsonify({"error": "server"}), 500
 
 @app.route("/login", methods=["POST"])
 def login():
-    data = request.json
-    device_id = data.get("device_id")
-    user = User.query.get(data["username"])
-    if not user or not check_password_hash(user.password, data["password"]):
-        return jsonify({"error": "invalid"}), 401
-    if user.current_token and user.current_device != device_id and not app.config["ALLOW_NO_DEVICE"]:
-        return jsonify({"error": "User already logged in on another device"}), 403
-    token = create_access_token(identity=user.username)
-    user.current_token = get_jwt()["jti"]
-    user.current_device = device_id
-    db.session.commit()
-    return jsonify({"access_token": token})
+    try:
+        data = request.json
+        device_id = data.get("device_id")
+        user = User.query.get(data["username"])
+        if not user or not check_password_hash(user.password, data["password"]):
+            return jsonify({"error": "invalid"}), 401
+        if user.current_token and user.current_device != device_id and not app.config["ALLOW_NO_DEVICE"]:
+            return jsonify({"error": "User already logged in on another device"}), 403
+
+        token = create_access_token(identity=user.username)
+        decoded_token = decode_token(token)
+        user.current_token = decoded_token["jti"]
+        user.current_device = device_id
+        db.session.commit()
+        return jsonify({"access_token": token})
+    except Exception as e:
+        logging.error(f"[Login Error] {e}")
+        return jsonify({"error": "server"}), 500
 
 @app.route("/logout", methods=["POST"])
 @jwt_required()
@@ -208,15 +159,13 @@ def logout():
         db.session.commit()
     return jsonify({"message": "logged out"})
 
-# -------------------------------------------------------------
-#  FEATURES (GPS, SOS, CHAT)
-# -------------------------------------------------------------
+# ---------------------- LOCATION ----------------------
 @app.route("/update_location", methods=["POST"])
 @jwt_required()
 @single_device_required
 def update_location():
-    user = User.query.get(get_jwt_identity())
     data = request.json
+    user = User.query.get(get_jwt_identity())
     user.lat = data["lat"]
     user.lon = data["lon"]
     user.last_seen = time.time()
@@ -227,30 +176,19 @@ def update_location():
 @jwt_required()
 @single_device_required
 def get_users():
+    now = time.time()
     current = get_jwt_identity()
     user = User.query.get(current)
-    now = time.time()
-    visible = []
+    result = []
     for u in User.query.all():
         if u.username == current or u.username in [i.username for i in user.ignored]:
             continue
         if now - u.last_seen > 30:
             continue
-        visible.append(u.to_json())
-    return jsonify(visible)
+        result.append(u.to_json())
+    return jsonify(result)
 
-@app.route("/ignore_user", methods=["POST"])
-@jwt_required()
-@single_device_required
-def ignore_user():
-    user = User.query.get(get_jwt_identity())
-    target = request.json.get("username")
-    target_user = User.query.get(target)
-    if target_user and target_user not in user.ignored:
-        user.ignored.append(target_user)
-        db.session.commit()
-    return jsonify({"ignored": target})
-
+# ---------------------- SOS & CHAT ----------------------
 @app.route("/sos", methods=["POST"])
 @jwt_required()
 @single_device_required
@@ -293,13 +231,8 @@ def get_messages():
             "audio": m.audio,
             "photo": m.photo,
             "created_at": m.created_at.isoformat()
-        }
-        for m in messages
+        } for m in messages
     ])
 
-# -------------------------------------------------------------
-#  MAIN
-# -------------------------------------------------------------
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
-
