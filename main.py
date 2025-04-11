@@ -13,11 +13,11 @@ from dotenv import load_dotenv
 
 # --- LOAD ENV ---
 load_dotenv()
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = os.getenv("DB_PORT")
-DB_NAME = os.getenv("DB_NAME")
+DB_USER = os.getenv("PGUSER")
+DB_PASSWORD = os.getenv("PGPASSWORD")
+DB_HOST = os.getenv("PGHOST")
+DB_PORT = os.getenv("PGPORT", "5432")
+DB_NAME = os.getenv("PGDATABASE")
 
 # --- CONFIG ---
 app = Flask(__name__)
@@ -61,7 +61,6 @@ class User(db.Model):
         secondaryjoin=username == ignored_users.c.ignored,
         backref='ignored_by'
     )
-
     def to_json(self):
         return {
             "username": self.username,
@@ -77,7 +76,6 @@ class Group(db.Model):
     owner = db.Column(db.String(80))
     avatar = db.Column(db.String(200))
     members = db.relationship("User", secondary=group_members, backref="groups")
-
     def to_json(self):
         return {
             "id": self.id,
@@ -152,7 +150,6 @@ def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # === AUTH / USERS / SOS ===
-
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -220,7 +217,5 @@ def sos():
     return jsonify({"message": "SOS received"})
 
 # --- MAIN ---
-
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=5000)
-
