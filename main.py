@@ -5,14 +5,19 @@ import base64
 import time
 from datetime import datetime, timedelta
 from functools import wraps
+
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from flask_jwt_extended import (
-    JWTManager, create_access_token, jwt_required,
-    get_jwt_identity, get_jwt, decode_token
+    JWTManager,
+    create_access_token,
+    jwt_required,
+    get_jwt_identity,
+    get_jwt,
+    decode_token
 )
 from dotenv import load_dotenv
 
@@ -35,12 +40,14 @@ app.config.update(
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 logging.basicConfig(level=logging.INFO)
+
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 CORS(app)
 
 # ---------------------- DATABASE MODELS ----------------------
+
 ignored_users = db.Table(
     "ignored_users",
     db.Column("user", db.String(80), db.ForeignKey("users.username")),
@@ -63,6 +70,9 @@ class User(db.Model):
         secondaryjoin=username == ignored_users.c.ignored,
         backref="ignored_by",
     )
+    # Связь с группами (создано для поддержки функционала групп)
+    groups = db.relationship("Group", secondary="group_members", back_populates="members")
+
     def to_json(self):
         return {
             "username": self.username,
@@ -82,7 +92,21 @@ class Message(db.Model):
     photo = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+# Новая модель Group и вспомогательная таблица для членов группы
+class Group(db.Model):
+    __tablename__ = "groups"
+    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    members = db.relationship("User", secondary="group_members", back_populates="groups")
+
+group_members = db.Table(
+    "group_members",
+    db.Column("group_id", db.String(36), db.ForeignKey("groups.id")),
+    db.Column("username", db.String(80), db.ForeignKey("users.username")),
+)
+
 # ---------------------- HELPERS ----------------------
+
 def single_device_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -109,11 +133,12 @@ def save_base64(data, ext):
         logging.error(f"[Base64 Error] {e}")
         return None
 
-@app.route("/uploads/")
+@app.route("/uploads/<filename>")
 def serve_upload(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
 # ---------------------- AUTH ----------------------
+
 @app.route("/register", methods=["POST"])
 def register():
     try:
@@ -138,7 +163,6 @@ def login():
             return jsonify({"error": "invalid"}), 401
         if user.current_token and user.current_device != device_id and not app.config["ALLOW_NO_DEVICE"]:
             return jsonify({"error": "User already logged in on another device"}), 403
-
         token = create_access_token(identity=user.username)
         decoded_token = decode_token(token)
         user.current_token = decoded_token["jti"]
@@ -160,6 +184,7 @@ def logout():
     return jsonify({"message": "logged out"})
 
 # ---------------------- LOCATION ----------------------
+
 @app.route("/update_location", methods=["POST"])
 @jwt_required()
 @single_device_required
@@ -189,6 +214,7 @@ def get_users():
     return jsonify(result)
 
 # ---------------------- SOS & CHAT ----------------------
+
 @app.route("/sos", methods=["POST"])
 @jwt_required()
 @single_device_required
@@ -233,6 +259,64 @@ def get_messages():
             "created_at": m.created_at.isoformat()
         } for m in messages
     ])
+
+# ---------------------- GROUPS ----------------------
+# Роуты для работы с группами
+
+@app.route("/create_group", methods=["POST"])
+@jwt_required()
+@single_device_required
+def create_group():
+    data = request.json
+    name = data.get("name")
+    if Group.query.filter_by(name=name).first():
+        return jsonify({"error": "Group already exists"}), 400
+    group = Group(name=name)
+    user = User.query.get(get_jwt_identity())
+    group.members.append(user)
+    db.session.add(group)
+    db.session.commit()
+    return jsonify({"message": "Group created", "group_id": group.id})
+
+@app.route("/join_group", methods=["POST"])
+@jwt_required()
+@single_device_required
+def join_group():
+    data = request.json
+    group_id = data.get("group_id")
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+    user = User.query.get(get_jwt_identity())
+    if user in group.members:
+        return jsonify({"message": "Already a member"})
+    group.members.append(user)
+    db.session.commit()
+    return jsonify({"message": "Joined group"})
+
+@app.route("/leave_group", methods=["POST"])
+@jwt_required()
+@single_device_required
+def leave_group():
+    data = request.json
+    group_id = data.get("group_id")
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({"error": "Group not found"}), 404
+    user = User.query.get(get_jwt_identity())
+    if user not in group.members:
+        return jsonify({"message": "Not a member"})
+    group.members.remove(user)
+    db.session.commit()
+    return jsonify({"message": "Left group"})
+
+@app.route("/my_groups", methods=["GET"])
+@jwt_required()
+@single_device_required
+def my_groups():
+    user = User.query.get(get_jwt_identity())
+    groups = [{"id": g.id, "name": g.name} for g in user.groups]
+    return jsonify(groups)
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
