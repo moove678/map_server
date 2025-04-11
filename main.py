@@ -16,7 +16,7 @@ load_dotenv()
 DB_USER = os.getenv("PGUSER")
 DB_PASSWORD = os.getenv("PGPASSWORD")
 DB_HOST = os.getenv("PGHOST")
-DB_PORT = os.getenv("PGPORT", "5432")
+DB_PORT = os.getenv("PGPORT")
 DB_NAME = os.getenv("PGDATABASE")
 
 # --- CONFIG ---
@@ -26,7 +26,7 @@ app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "jwtsecret")
 app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['UPLOAD_FOLDER'] = os.getenv("UPLOAD_FOLDER", "uploads")
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
 # --- INIT ---
@@ -150,6 +150,7 @@ def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 # === AUTH / USERS / SOS ===
+
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -179,6 +180,7 @@ def update_location():
     user.lon = data['lon']
     user.last_seen = time.time()
     db.session.commit()
+    print(f"[UPDATE_LOCATION] {user.username}: lat={user.lat}, lon={user.lon}, time={user.last_seen}")
     return jsonify({"status": "ok"})
 
 @app.route('/get_users', methods=['GET'])
@@ -189,12 +191,22 @@ def get_users():
     all_users = User.query.all()
     now = time.time()
     result = []
+
+    print(f"[GET_USERS] current user: {current}")
+    print(f"[GET_USERS] all users: {[u.username for u in all_users]}")
+    print(f"[GET_USERS] ignored list: {[i.username for i in user.ignored]}")
+
     for u in all_users:
+        print(f"  Checking: {u.username} - last_seen delta: {now - u.last_seen:.2f} sec")
         if u.username == current or u.username in [i.username for i in user.ignored]:
+            print(f"    Skipped: {u.username} (self or ignored)")
             continue
         if now - u.last_seen > 30:
+            print(f"    Skipped: {u.username} (too old)")
             continue
         result.append(u.to_json())
+
+    print(f"[GET_USERS] result: {result}")
     return jsonify(result)
 
 @app.route('/ignore_user', methods=['POST'])
