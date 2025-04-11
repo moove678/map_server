@@ -1,45 +1,49 @@
 import os
 import uuid
-import base64
 import logging
+import base64
 import time
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from werkzeug.security import generate_password_hash, check_password_hash
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from dotenv import load_dotenv
 
+# --- LOAD ENV ---
 load_dotenv()
-
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 DB_NAME = os.getenv("DB_NAME")
 
+# --- CONFIG ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv("SECRET_KEY", "supersecret")
 app.config['JWT_SECRET_KEY'] = os.getenv("JWT_SECRET_KEY", "jwtsecret")
-app.config['SQLALCHEMY_DATABASE_URI'] = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+app.config['SQLALCHEMY_DATABASE_URI'] = f'postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['JSON_AS_ASCII'] = False
 app.config['UPLOAD_FOLDER'] = 'uploads'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# --- INIT ---
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 logging.basicConfig(level=logging.DEBUG)
 
-# MODELS
-ignored_users = db.Table('ignored_users',
+# --- MODELS ---
+ignored_users = db.Table(
+    'ignored_users',
     db.Column('user', db.String(80), db.ForeignKey('users.username')),
     db.Column('ignored', db.String(80), db.ForeignKey('users.username'))
 )
 
-group_members = db.Table('group_members',
+group_members = db.Table(
+    'group_members',
     db.Column('group_id', db.String(36), db.ForeignKey('groups.id')),
     db.Column('username', db.String(80), db.ForeignKey('users.username'))
 )
@@ -51,10 +55,12 @@ class User(db.Model):
     lat = db.Column(db.Float, default=0.0)
     lon = db.Column(db.Float, default=0.0)
     last_seen = db.Column(db.Float, default=lambda: time.time())
-    ignored = db.relationship('User', secondary=ignored_users,
+    ignored = db.relationship(
+        'User', secondary=ignored_users,
         primaryjoin=username == ignored_users.c.user,
         secondaryjoin=username == ignored_users.c.ignored,
-        backref='ignored_by')
+        backref='ignored_by'
+    )
 
     def to_json(self):
         return {
@@ -118,7 +124,7 @@ class RouteComment(db.Model):
     time = db.Column(db.String(50))
     photo = db.Column(db.String(200))
 
-# HELPERS
+# --- HELPERS ---
 def save_file(field):
     if field not in request.files:
         return None
@@ -145,7 +151,8 @@ def save_base64(data, ext):
 def serve_upload(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-# AUTH
+# === AUTH / USERS / SOS ===
+
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -166,6 +173,44 @@ def login():
     token = create_access_token(identity=user.username)
     return jsonify({"access_token": token})
 
+@app.route('/update_location', methods=['POST'])
+@jwt_required()
+def update_location():
+    user = User.query.get(get_jwt_identity())
+    data = request.json
+    user.lat = data['lat']
+    user.lon = data['lon']
+    user.last_seen = time.time()
+    db.session.commit()
+    return jsonify({"status": "ok"})
+
+@app.route('/get_users', methods=['GET'])
+@jwt_required()
+def get_users():
+    current = get_jwt_identity()
+    user = User.query.get(current)
+    all_users = User.query.all()
+    now = time.time()
+    result = []
+    for u in all_users:
+        if u.username == current or u.username in [i.username for i in user.ignored]:
+            continue
+        if now - u.last_seen > 30:
+            continue
+        result.append(u.to_json())
+    return jsonify(result)
+
+@app.route('/ignore_user', methods=['POST'])
+@jwt_required()
+def ignore_user():
+    user = User.query.get(get_jwt_identity())
+    target = request.json.get('username')
+    target_user = User.query.get(target)
+    if target_user and target_user not in user.ignored:
+        user.ignored.append(target_user)
+        db.session.commit()
+    return jsonify({"ignored": target})
+
 @app.route('/sos', methods=['POST'])
 @jwt_required()
 def sos():
@@ -174,5 +219,8 @@ def sos():
     logging.warning(f"SOS from {user}: {data}")
     return jsonify({"message": "SOS received"})
 
+# --- MAIN ---
+
 if __name__ == '__main__':
     app.run(debug=True, host="0.0.0.0", port=5000)
+
