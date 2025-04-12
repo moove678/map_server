@@ -1,4 +1,8 @@
-import os, uuid, logging, time, math
+import os
+import uuid
+import logging
+import time
+import math
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -12,8 +16,12 @@ from flask_jwt_extended import (
     get_jwt_identity, get_jwt, decode_token
 )
 from dotenv import load_dotenv
+
+
+# ------------------- Загрузка env-переменных -------------------
 load_dotenv()
 
+# ------------------- Конфиг приложения -------------------
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.getenv("SECRET_KEY", "supersecret"),
@@ -28,13 +36,17 @@ app.config.update(
     UPLOAD_FOLDER=os.getenv("UPLOAD_FOLDER", "uploads"),
     ALLOW_NO_DEVICE=os.getenv("ALLOW_NO_DEVICE", "false").lower() == "true",
 )
-os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 logging.basicConfig(level=logging.INFO)
+
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 jwt = JWTManager(app)
 CORS(app)
+
+
+# ------------------- Таблицы и модели -------------------
 
 ignored_users = db.Table(
     "ignored_users",
@@ -44,43 +56,51 @@ ignored_users = db.Table(
 
 class User(db.Model):
     __tablename__ = "users"
-    username = db.Column(db.String(80), primary_key=True)
-    password = db.Column(db.String(200), nullable=False)
-    lat = db.Column(db.Float, default=0.0)
-    lon = db.Column(db.Float, default=0.0)
-    last_seen = db.Column(db.Float, default=lambda: time.time())
-    current_token = db.Column(db.String(500))
+    username       = db.Column(db.String(80), primary_key=True)
+    password       = db.Column(db.String(200), nullable=False)
+    lat            = db.Column(db.Float, default=0.0)
+    lon            = db.Column(db.Float, default=0.0)
+    last_seen      = db.Column(db.Float, default=lambda: time.time())
+    current_token  = db.Column(db.String(500))
     current_device = db.Column(db.String(100))
+
     ignored = db.relationship(
         "User", secondary=ignored_users,
         primaryjoin=username == ignored_users.c.user,
         secondaryjoin=username == ignored_users.c.ignored,
         backref="ignored_by",
     )
+
     groups = db.relationship("Group", secondary="group_members", back_populates="members")
 
     def to_json(self):
-        return dict(username=self.username, lat=self.lat, lon=self.lon, last_seen=self.last_seen)
+        return {
+            "username":  self.username,
+            "lat":       self.lat,
+            "lon":       self.lon,
+            "last_seen": self.last_seen
+        }
 
 class Message(db.Model):
     __tablename__ = "messages"
-    id = db.Column(db.Integer, primary_key=True)
-    group_id = db.Column(db.String(36))
-    sender = db.Column(db.String(80), db.ForeignKey("users.username"))
-    receiver = db.Column(db.String(80))
-    text = db.Column(db.Text, default="")
-    audio = db.Column(db.String(200))
-    photo = db.Column(db.String(200))
+    id         = db.Column(db.Integer, primary_key=True)
+    group_id   = db.Column(db.String(36))
+    sender     = db.Column(db.String(80), db.ForeignKey("users.username"))
+    receiver   = db.Column(db.String(80))
+    text       = db.Column(db.Text, default="")
+    audio      = db.Column(db.String(200))
+    photo      = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Group(db.Model):
     __tablename__ = "groups"
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = db.Column(db.String(100), unique=True, nullable=False)
-    lat = db.Column(db.Float, default=0.0)
-    lon = db.Column(db.Float, default=0.0)
+    id        = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name      = db.Column(db.String(100), unique=True, nullable=False)
+    lat       = db.Column(db.Float, default=0.0)
+    lon       = db.Column(db.Float, default=0.0)
     is_public = db.Column(db.Boolean, default=True)
-    created = db.Column(db.DateTime, default=datetime.utcnow)  # <= добавлено
+    created   = db.Column(db.DateTime, default=datetime.utcnow)
+
     members = db.relationship("User", secondary="group_members", back_populates="groups")
 
 group_members = db.Table(
@@ -91,57 +111,65 @@ group_members = db.Table(
 
 class Invite(db.Model):
     __tablename__ = "invites"
-    id = db.Column(db.Integer, primary_key=True)
+    id        = db.Column(db.Integer, primary_key=True)
     from_user = db.Column(db.String(80))
-    to_user = db.Column(db.String(80))
-    group_id = db.Column(db.String(36))
-    created = db.Column(db.DateTime, default=datetime.utcnow)
+    to_user   = db.Column(db.String(80))
+    group_id  = db.Column(db.String(36))
+    created   = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Sos(db.Model):
     __tablename__ = "sos"
-    id = db.Column(db.Integer, primary_key=True)
+    id       = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), db.ForeignKey("users.username"))
-    lat = db.Column(db.Float)
-    lon = db.Column(db.Float)
-    comment = db.Column(db.Text, default="")
-    photo = db.Column(db.String(200))
-    created = db.Column(db.DateTime, default=datetime.utcnow)
+    lat      = db.Column(db.Float)
+    lon      = db.Column(db.Float)
+    comment  = db.Column(db.Text, default="")
+    photo    = db.Column(db.String(200))
+    created  = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Route(db.Model):
     __tablename__ = "routes"
-    id = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    name = db.Column(db.String(120))
-    owner = db.Column(db.String(80), db.ForeignKey("users.username"))
-    created = db.Column(db.DateTime, default=datetime.utcnow)
-    points = db.relationship("RoutePoint", backref="route", cascade="all,delete")
+    id       = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    name     = db.Column(db.String(120))
+    owner    = db.Column(db.String(80), db.ForeignKey("users.username"))
+    created  = db.Column(db.DateTime, default=datetime.utcnow)
+
+    points   = db.relationship("RoutePoint",   backref="route", cascade="all,delete")
     comments = db.relationship("RouteComment", backref="route", cascade="all,delete")
 
 class RoutePoint(db.Model):
     __tablename__ = "route_points"
-    id = db.Column(db.Integer, primary_key=True)
+    id       = db.Column(db.Integer, primary_key=True)
     route_id = db.Column(db.String(36), db.ForeignKey("routes.id"))
-    lat = db.Column(db.Float)
-    lon = db.Column(db.Float)
-    ts = db.Column(db.DateTime, default=datetime.utcnow)
+    lat      = db.Column(db.Float)
+    lon      = db.Column(db.Float)
+    ts       = db.Column(db.DateTime, default=datetime.utcnow)
 
 class RouteComment(db.Model):
     __tablename__ = "route_comments"
-    id = db.Column(db.Integer, primary_key=True)
+    id       = db.Column(db.Integer, primary_key=True)
     route_id = db.Column(db.String(36), db.ForeignKey("routes.id"))
-    lat = db.Column(db.Float)
-    lon = db.Column(db.Float)
-    text = db.Column(db.Text)
-    photo = db.Column(db.String(200))
-    ts = db.Column(db.DateTime, default=datetime.utcnow)
+    lat      = db.Column(db.Float)
+    lon      = db.Column(db.Float)
+    text     = db.Column(db.Text)
+    photo    = db.Column(db.String(200))
+    ts       = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+# ------------------- Хелперы авторизации -------------------
+
+from flask_jwt_extended import get_jwt_identity, get_jwt
+
 def single_device_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if app.config["ALLOW_NO_DEVICE"]:
             return fn(*args, **kwargs)
+
         identity = get_jwt_identity()
-        jti = get_jwt().get("jti")
-        device = request.headers.get("X-Device-ID")
-        user = User.query.get(identity)
+        jti      = get_jwt().get("jti")
+        device   = request.headers.get("X-Device-ID")
+        user     = User.query.get(identity)
         if not user or user.current_token != jti or user.current_device != device:
             return jsonify(error="Unauthorized"), 403
         return fn(*args, **kwargs)
@@ -165,14 +193,19 @@ def _store_media_from_request():
 def serve_upload(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
-# ---------------------- AUTH ----------------------
+# ------------------- Регистрация / логин / логаут -------------------
 
 @app.route("/register", methods=["POST"])
 def register():
     d = request.json
     if User.query.get(d["username"]):
         return jsonify(error="exists"), 400
-    db.session.add(User(username=d["username"], password=generate_password_hash(d["password"])))
+    db.session.add(
+        User(
+            username=d["username"],
+            password=generate_password_hash(d["password"])
+        )
+    )
     db.session.commit()
     return jsonify(message="registered")
 
@@ -183,12 +216,15 @@ def login():
     user = User.query.get(d["username"])
     if not user or not check_password_hash(user.password, d["password"]):
         return jsonify(error="invalid"), 401
+
     if user.current_token and user.current_device != device_id and not app.config["ALLOW_NO_DEVICE"]:
         return jsonify(error="already_logged"), 403
+
     token = create_access_token(identity=user.username)
     user.current_token = decode_token(token)["jti"]
     user.current_device = device_id
     db.session.commit()
+
     return jsonify(access_token=token)
 
 @app.route("/logout", methods=["POST"])
@@ -196,11 +232,13 @@ def login():
 def logout():
     u = User.query.get(get_jwt_identity())
     if u:
-        u.current_token = u.current_device = None
+        u.current_token = None
+        u.current_device = None
         db.session.commit()
     return jsonify(message="logged out")
 
-# ---------------------- LOCATION ----------------------
+
+# ------------------- Старые эндпоинты LOCATION & USERS -------------------
 
 @app.route("/update_location", methods=["POST"])
 @jwt_required()
@@ -208,7 +246,8 @@ def logout():
 def update_location():
     d = request.json
     u = User.query.get(get_jwt_identity())
-    u.lat, u.lon = d["lat"], d["lon"]
+    u.lat = d["lat"]
+    u.lon = d["lon"]
     u.last_seen = time.time()
     db.session.commit()
     return jsonify(status="ok")
@@ -218,7 +257,7 @@ def update_location():
 @single_device_required
 def get_users():
     now = time.time()
-    me = get_jwt_identity()
+    me  = get_jwt_identity()
     cur = User.query.get(me)
     res = []
     for u in User.query.all():
@@ -229,17 +268,116 @@ def get_users():
         res.append(u.to_json())
     return jsonify(res)
 
-# ---------------------- GROUP HELPERS ----------------------
+
+# ------------------- Новый batch-эндпоинт /sync -------------------
+
+def _haversine_km(lat1, lon1, lat2, lon2):
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * \
+        math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+@app.route("/sync", methods=["POST"])
+@jwt_required()
+@single_device_required
+def sync():
+    """
+    Клиент шлёт: {
+      "lat": <float>, "lon": <float>,
+      "last_msg_time": <ISO8601>, "last_sos_time": <ISO8601>,
+      "group_id": <str or null>
+    }
+    Сервер отвечает:
+    {
+      "updated_users": [...],
+      "new_messages": [...],
+      "sos_alerts": [...],
+      "group_status": {...}
+    }
+    """
+    req = request.json or {}
+    me_name = get_jwt_identity()
+    me      = User.query.get(me_name)
+
+    # Обновить координаты
+    me.lat = req.get("lat", me.lat)
+    me.lon = req.get("lon", me.lon)
+    me.last_seen = time.time()
+
+    # Вычислить пользователей в радиусе N км (по умолчанию 5)
+    radius_km = float(os.getenv("USER_RADIUS_KM", 5))
+
+    users_near = []
+    now_ts = time.time()
+    for u in User.query.all():
+        if u.username == me_name:
+            continue
+        if now_ts - u.last_seen > 180:
+            continue
+        dist = _haversine_km(me.lat, me.lon, u.lat, u.lon)
+        if dist <= radius_km:
+            users_near.append(u.to_json())
+
+    # Групповые сообщения
+    new_group_msgs = []
+    gid = req.get("group_id")
+    if gid:
+        last_iso = req.get("last_msg_time")
+        q = Message.query.filter_by(group_id=gid)
+        if last_iso:
+            q = q.filter(Message.created_at > datetime.fromisoformat(last_iso))
+        msgs = q.order_by(Message.created_at.asc()).all()
+        new_group_msgs = [{
+            "id": m.id, "from": m.sender, "text": m.text,
+            "photo": m.photo, "audio": m.audio,
+            "created_at": m.created_at.isoformat()
+        } for m in msgs]
+
+    # SOS
+    new_sos = []
+    last_sos_iso = req.get("last_sos_time")
+    q_sos = Sos.query
+    if last_sos_iso:
+        q_sos = q_sos.filter(Sos.created > datetime.fromisoformat(last_sos_iso))
+    soses = q_sos.order_by(Sos.created.asc()).all()
+    new_sos = [{
+        "id": s.id, "user": s.username,
+        "lat": s.lat, "lon": s.lon,
+        "comment": s.comment, "photo": s.photo,
+        "created": s.created.isoformat()
+    } for s in soses]
+
+    # Статус группы
+    group_status = {}
+    if gid:
+        g = Group.query.get(gid)
+        if g:
+            group_status = {
+                "id": g.id,
+                "name": g.name,
+                "members": [usr.username for usr in g.members]
+            }
+
+    db.session.commit()
+
+    return jsonify(
+        updated_users = users_near,
+        new_messages  = new_group_msgs,
+        sos_alerts    = new_sos,
+        group_status  = group_status
+    )
+
+
+# ------------------- Группы -------------------
 
 def _remove_from_all_groups(user: User):
     for g in list(user.groups):
         g.members.remove(user)
-        if len(g.members) == 0:
-            if g.created and datetime.utcnow() - g.created < timedelta(minutes=1):
-                continue
+        # если группа осталась пустой, снести её
+        if len(g.members) == 0 and g.created and datetime.utcnow() - g.created >= timedelta(minutes=1):
             db.session.delete(g)
-
-# ---------------------- GROUP ENDPOINTS ----------------------
 
 @app.route("/create_group", methods=["POST"])
 @jwt_required()
@@ -250,7 +388,12 @@ def create_group():
         return jsonify(error="exists"), 400
     usr = User.query.get(get_jwt_identity())
     _remove_from_all_groups(usr)
-    grp = Group(name=d["name"], lat=d.get("lat", 0.0), lon=d.get("lon", 0.0), is_public=d.get("is_public", True))
+    grp = Group(
+        name=d["name"],
+        lat=d.get("lat", 0.0),
+        lon=d.get("lon", 0.0),
+        is_public=d.get("is_public", True)
+    )
     grp.members.append(usr)
     db.session.add(grp)
     db.session.commit()
@@ -291,14 +434,10 @@ def leave_group():
 @single_device_required
 def my_groups():
     usr = User.query.get(get_jwt_identity())
-    return jsonify([{"id": g.id, "name": g.name} for g in usr.groups])
-def _haversine_km(lat1, lon1, lat2, lon2):
-    R = 6371
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * \
-        math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
-    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return jsonify([
+        {"id": g.id, "name": g.name}
+        for g in usr.groups
+    ])
 
 @app.route("/public_groups", methods=["GET"])
 @jwt_required()
@@ -309,13 +448,19 @@ def public_groups():
     radius = float(request.args.get("radius_km", 5))
     groups = []
     for g in Group.query.filter_by(is_public=True).all():
-        if _haversine_km(lat, lon, g.lat, g.lon) <= radius:
-            groups.append({"id": g.id, "name": g.name,
-                           "lat": g.lat, "lon": g.lon,
-                           "members": len(g.members)})
+        dist = _haversine_km(lat, lon, g.lat, g.lon)
+        if dist <= radius:
+            groups.append({
+                "id": g.id,
+                "name": g.name,
+                "lat": g.lat,
+                "lon": g.lon,
+                "members": len(g.members)
+            })
     return jsonify(groups)
 
-# ---------------------- MESSAGING ----------------------
+
+# ------------------- Сообщения (групповые, приватные) -------------------
 
 @app.route("/send_message", methods=["POST"])
 @jwt_required()
@@ -333,6 +478,7 @@ def send_message():
         text = d.get("text", "")
         audio_fn = d.get("audio")
         photo_fn = d.get("photo")
+
     msg = Message(group_id=group_id, sender=sender,
                   text=text, audio=audio_fn, photo=photo_fn)
     db.session.add(msg)
@@ -360,6 +506,7 @@ def get_messages():
 @single_device_required
 def send_private_message():
     sender = get_jwt_identity()
+
     if request.content_type and request.content_type.startswith("multipart"):
         form = request.form
         to_user = form.get("to_user")
@@ -371,6 +518,7 @@ def send_private_message():
         text = d.get("text", "")
         audio_fn = d.get("audio")
         photo_fn = d.get("photo")
+
     msg = Message(sender=sender, receiver=to_user,
                   text=text, audio=audio_fn, photo=photo_fn)
     db.session.add(msg)
@@ -388,12 +536,16 @@ def get_private_messages():
         q = q.filter(Message.id > after)
     msgs = q.order_by(Message.created_at.asc()).all()
     return jsonify([{
-        "id": m.id, "sender": m.sender, "text": m.text,
-        "photo": m.photo, "audio": m.audio,
+        "id": m.id,
+        "sender": m.sender,
+        "text": m.text,
+        "photo": m.photo,
+        "audio": m.audio,
         "created_at": m.created_at.isoformat()
     } for m in msgs])
 
-# ---------------------- SOS ----------------------
+
+# ------------------- SOS -------------------
 
 @app.route("/sos", methods=["POST"])
 @jwt_required()
@@ -411,14 +563,20 @@ def sos():
         lon = d.get("lon", 0.0)
         comment = d.get("comment", "")
         photo_fn = d.get("photo")
-    entry = Sos(username=get_jwt_identity(), lat=lat, lon=lon,
-                comment=comment, photo=photo_fn)
+
+    entry = Sos(
+        username=get_jwt_identity(),
+        lat=lat, lon=lon,
+        comment=comment,
+        photo=photo_fn
+    )
     db.session.add(entry)
     db.session.commit()
     logging.warning("SOS from %s @ %s,%s", entry.username, entry.lat, entry.lon)
     return jsonify(id=entry.id)
 
-# ---------------------- ROUTES ----------------------
+
+# ------------------- Маршруты (create / points / comments / list) -------------------
 
 @app.route("/create_route", methods=["POST"])
 @jwt_required()
@@ -436,7 +594,11 @@ def create_route():
 @single_device_required
 def add_route_point():
     d = request.json
-    pt = RoutePoint(route_id=d["route_id"], lat=d["lat"], lon=d["lon"])
+    pt = RoutePoint(
+        route_id=d["route_id"],
+        lat=d["lat"],
+        lon=d["lon"]
+    )
     db.session.add(pt)
     db.session.commit()
     return jsonify(id=pt.id)
@@ -458,8 +620,13 @@ def add_route_comment():
         lat, lon = d["lat"], d["lon"]
         text = d.get("text", "")
         photo_fn = d.get("photo")
-    cm = RouteComment(route_id=route_id, lat=lat, lon=lon,
-                      text=text, photo=photo_fn)
+
+    cm = RouteComment(
+        route_id=route_id,
+        lat=lat, lon=lon,
+        text=text,
+        photo=photo_fn
+    )
     db.session.add(cm)
     db.session.commit()
     return jsonify(id=cm.id)
@@ -472,15 +639,26 @@ def get_route():
     route = Route.query.get(rid)
     if not route:
         return jsonify(error="not_found"), 404
-    return jsonify(
-        id=route.id,
-        name=route.name,
-        owner=route.owner,
-        created=route.created.isoformat(),
-        route_points=[dict(lat=p.lat, lon=p.lon, ts=p.ts.isoformat()) for p in route.points],
-        route_comments=[dict(lat=c.lat, lon=c.lon, text=c.text,
-                             photo=c.photo, ts=c.ts.isoformat()) for c in route.comments]
-    )
+
+    return jsonify({
+        "id":        route.id,
+        "name":      route.name,
+        "owner":     route.owner,
+        "created":   route.created.isoformat(),
+        "route_points": [
+            {
+                "lat": p.lat, "lon": p.lon,
+                "ts": p.ts.isoformat()
+            } for p in route.points
+        ],
+        "route_comments": [
+            {
+                "lat": c.lat, "lon": c.lon,
+                "text": c.text, "photo": c.photo,
+                "ts": c.ts.isoformat()
+            } for c in route.comments
+        ]
+    })
 
 @app.route("/list_routes", methods=["GET"])
 @jwt_required()
@@ -488,16 +666,18 @@ def get_route():
 def list_routes():
     me = get_jwt_identity()
     routes = Route.query.filter_by(owner=me).all()
-    return jsonify([{
-        "id": r.id,
-        "name": r.name,
-        "created": r.created.isoformat(),
-        "points": len(r.points),
-        "comments": len(r.comments)
-    } for r in routes])
+    return jsonify([
+        {
+            "id":       r.id,
+            "name":     r.name,
+            "created":  r.created.isoformat(),
+            "points":   len(r.points),
+            "comments": len(r.comments)
+        } for r in routes
+    ])
 
-# ---------------------- START APP ----------------------
+
+# ------------------- Запуск -------------------
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
-
