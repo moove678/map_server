@@ -242,7 +242,7 @@ def get_users():
     for u in User.query.all():
         if u.username == current or u.username in [i.username for i in user.ignored]:
             continue
-        if now - u.last_seen > 30:
+        if now - u.last_seen > 180:
             continue
         result.append(u.to_json())
     return jsonify(result)
