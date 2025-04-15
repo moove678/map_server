@@ -343,7 +343,8 @@ def sync():
 
     private_msgs = [{
         "id": m.id,
-        "from": m.sender,
+        "to_user": m.receiver,
+        "from_user": m.sender,
         "text": m.text,
         "photo": m.photo,
         "audio": m.audio,
