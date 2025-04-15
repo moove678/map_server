@@ -537,7 +537,8 @@ def get_private_messages():
     msgs = q.order_by(Message.created_at.asc()).all()
     return jsonify([{
         "id": m.id,
-        "sender": m.sender,
+        "from_user": m.sender,
+        "to_user": m.reciver,
         "text": m.text,
         "photo": m.photo,
         "audio": m.audio,
