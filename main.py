@@ -335,6 +335,21 @@ def sync():
             "created_at": m.created_at.isoformat()
         } for m in msgs]
 
+    # Приватные сообщения
+    last_private_id = req.get("last_private_id", 0)
+    q_private = Message.query.filter_by(receiver=me_name)
+    if last_private_id:
+        q_private = q_private.filter(Message.id > last_private_id)
+
+    private_msgs = [{
+        "id": m.id,
+        "from": m.sender,
+        "text": m.text,
+        "photo": m.photo,
+        "audio": m.audio,
+        "created_at": m.created_at.isoformat()
+    } for m in q_private.order_by(Message.created_at.asc()).all()]
+
     # SOS
     new_sos = []
     last_sos_iso = req.get("last_sos_time")
@@ -366,6 +381,7 @@ def sync():
         updated_users = users_near,
         new_messages  = new_group_msgs,
         sos_alerts    = new_sos,
+        private_messages = private_msgs,
         group_status  = group_status
     )
 
