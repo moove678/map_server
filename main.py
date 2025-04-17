@@ -1,4 +1,4 @@
-import os
+Wimport os
 import uuid
 import logging
 import time
@@ -545,6 +545,41 @@ def send_invite():
     db.session.add(invite)
     db.session.commit()
     return jsonify(success=True)
+
+@app.route("/get_invites", methods=["GET"])
+@jwt_required()
+@single_device_required
+def get_invites():
+    me = get_jwt_identity()
+    invites = Invite.query.filter_by(to_user=me).order_by(Invite.created.asc()).all()
+    return jsonify([
+        {
+            "id": inv.id,
+            "from_user": inv.from_user,
+            "to_user": inv.to_user,
+            "group_id": inv.group_id,
+            "created": inv.created.isoformat()
+        } for inv in invites
+    ])
+
+@app.route("/reject_invite", methods=["POST"])
+@jwt_required()
+@single_device_required
+def reject_invite():
+    me = get_jwt_identity()
+    d = request.json or {}
+    invite_id = d.get("invite_id")
+
+    if not invite_id:
+        return jsonify(error="missing_invite_id"), 400
+
+    inv = Invite.query.filter_by(id=invite_id, to_user=me).first()
+    if inv:
+        db.session.delete(inv)
+        db.session.commit()
+        return jsonify(success=True)
+
+    return jsonify(error="not_found"), 404
 
 @app.route("/send_private_message", methods=["POST"])
 @jwt_required()
