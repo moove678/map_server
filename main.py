@@ -529,11 +529,6 @@ def get_messages():
         "created_at": m.created_at.isoformat()
     } for m in msgs])
 
-@app.route("/send_private_message", methods=["POST"])
-@jwt_required()
-@single_device_required
-
-
 @app.route("/send_invite", methods=["POST"])
 @jwt_required()
 @single_device_required
@@ -551,6 +546,9 @@ def send_invite():
     db.session.commit()
     return jsonify(success=True)
 
+@app.route("/send_private_message", methods=["POST"])
+@jwt_required()
+@single_device_required
 def send_private_message():
     sender = get_jwt_identity()
 
