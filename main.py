@@ -378,12 +378,23 @@ def sync():
 
     db.session.commit()
 
+    group_invites = []
+    invites = Invite.query.filter_by(to_user=me_name).order_by(Invite.created.asc()).all()
+    group_invites = [{
+        "id": inv.id,
+        "from_user": inv.from_user,
+        "to_user": inv.to_user,
+        "group_id": inv.group_id,
+        "created": inv.created.isoformat()
+    } for inv in invites]
+
     return jsonify(
         updated_users = users_near,
         new_messages  = new_group_msgs,
         sos_alerts    = new_sos,
         private_messages = private_msgs,
-        group_status  = group_status
+        group_status  = group_status,
+        group_invites = group_invites
     )
 
 
