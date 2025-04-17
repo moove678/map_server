@@ -532,6 +532,25 @@ def get_messages():
 @app.route("/send_private_message", methods=["POST"])
 @jwt_required()
 @single_device_required
+
+
+@app.route("/send_invite", methods=["POST"])
+@jwt_required()
+@single_device_required
+def send_invite():
+    d = request.json
+    from_user = get_jwt_identity()
+    to_user = d.get("to_user")
+    group_id = d.get("group_id")
+
+    if not to_user or not group_id:
+        return jsonify(error="missing_data"), 400
+
+    invite = Invite(from_user=from_user, to_user=to_user, group_id=group_id)
+    db.session.add(invite)
+    db.session.commit()
+    return jsonify(success=True)
+
 def send_private_message():
     sender = get_jwt_identity()
 
