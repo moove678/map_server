@@ -1,3 +1,4 @@
+(venv) name@DESKTOP-CSH0P1G:~/map_server$ cat main.py
 import os
 import uuid
 import logging
@@ -325,7 +326,7 @@ def sync():
     gid = req.get("group_id")
     if gid:
         last_iso = req.get("last_msg_time")
-        q_private = Message.query.filter_by(group_id=gid)
+        q = Message.query.filter_by(group_id=gid)
         if last_iso:
             q = q.filter(Message.created_at > datetime.fromisoformat(last_iso))
         msgs = q.order_by(Message.created_at.asc()).all()
@@ -337,10 +338,7 @@ def sync():
 
     # Приватные сообщения
     last_private_id = req.get("last_private_id", 0)
-
-    q = Message.query.filter(
-        (Message.sender == me) | (Message.receiver == me)
-    )
+    q_private = Message.query.filter_by(receiver=me_name)
     if last_private_id:
         q_private = q_private.filter(Message.id > last_private_id)
 
@@ -527,7 +525,7 @@ def get_messages():
         q = q.filter(Message.id > after)
     msgs = q.order_by(Message.created_at.asc()).all()
     return jsonify([{
-        "id": m.id, "group_id": m.group_id, "from": m.sender, "text": m.text,
+        "id": m.id, "from": m.sender, "text": m.text,
         "photo": m.photo, "audio": m.audio,
         "created_at": m.created_at.isoformat()
     } for m in msgs])
@@ -596,7 +594,7 @@ def send_private_message():
         text = form.get("text", "")
         audio_fn, photo_fn = _store_media_from_request()
     else:
-        d = request.json or {}
+        d = request.json
         to_user = d.get("to_user")
         text = d.get("text", "")
         audio_fn = d.get("audio")
@@ -614,18 +612,14 @@ def send_private_message():
 def get_private_messages():
     me = get_jwt_identity()
     after = int(request.args.get("after_id", 0))
-
-    q = Message.query.filter(
-        or_(Message.sender == me, Message.receiver == me)
-    )
-
+    q = Message.query.filter_by(receiver=me)
     if after:
         q = q.filter(Message.id > after)
     msgs = q.order_by(Message.created_at.asc()).all()
     return jsonify([{
         "id": m.id,
         "from_user": m.sender,
-        "to_user": m.receiver,
+        "to_user": m.reciver,
         "text": m.text,
         "photo": m.photo,
         "audio": m.audio,
