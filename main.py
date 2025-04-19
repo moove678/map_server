@@ -619,14 +619,21 @@ def get_private_messages():
 
     # Получаем все входящие и исходящие сообщения между двумя пользователями
     q = PrivateMessage.query.filter(
-        ((PrivateMessage.from_user == username) & (PrivateMessage.to_user == to_user)) |
-        ((PrivateMessage.from_user == to_user) & (PrivateMessage.to_user == username))
+        or_(
+            and_(PrivateMessage.from_user == username, PrivateMessage.to_user == to_user),
+            and_(PrivateMessage.from_user == to_user, PrivateMessage.to_user == username)
+        )
     )
 
     if after_id:
         q = q.filter(PrivateMessage.id > after_id)
 
     msgs = q.order_by(PrivateMessage.id.asc()).all()
+
+    print("[DEBUG] Получено сообщений:", len(msgs))
+for m in msgs:
+    print(f"FROM: {m.from_user} → TO: {m.to_user} | TEXT: {m.text}")
+
 
     return jsonify([
         {
