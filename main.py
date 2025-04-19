@@ -5,7 +5,7 @@ import time
 import math
 from datetime import datetime, timedelta
 from functools import wraps
-
+from sqlalchemy import or_, and_
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
