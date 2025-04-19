@@ -337,7 +337,10 @@ def sync():
 
     # Приватные сообщения
     last_private_id = req.get("last_private_id", 0)
-    q_private = Message.query.filter_by(receiver=me_name)
+
+    q = Message.query.filter(
+        (Message.sender == me) | (Message.receiver == me)
+    )
     if last_private_id:
         q_private = q_private.filter(Message.id > last_private_id)
 
