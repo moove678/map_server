@@ -325,7 +325,7 @@ def sync():
     gid = req.get("group_id")
     if gid:
         last_iso = req.get("last_msg_time")
-        q = Message.query.filter_by(group_id=gid)
+        q_private = Message.query.filter_by(group_id=gid)
         if last_iso:
             q = q.filter(Message.created_at > datetime.fromisoformat(last_iso))
         msgs = q.order_by(Message.created_at.asc()).all()
@@ -625,7 +625,7 @@ def get_private_messages():
     return jsonify([{
         "id": m.id,
         "from_user": m.sender,
-        "to_user": m.reciver,
+        "to_user": m.receiver,
         "text": m.text,
         "photo": m.photo,
         "audio": m.audio,
