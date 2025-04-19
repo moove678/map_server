@@ -609,7 +609,7 @@ def send_private_message():
         audio_fn = d.get("audio")
         photo_fn = d.get("photo")
 
-    msg = PrivateMessage(sender=sender, receiver=to_user,
+    msg = PrivateMessage(from_user=sender, to_user=to_user,
                   text=text, audio=audio_fn, photo=photo_fn)
     db.session.add(msg)
     db.session.commit()
