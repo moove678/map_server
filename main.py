@@ -594,9 +594,15 @@ def reject_invite():
 @app.route("/send_private_message", methods=["POST"])
 @jwt_required()
 @single_device_required
-def send_private_message():
-    sender = get_jwt_identity()
 
+@app.route("/send_private_message", methods=["POST"])
+@jwt_required()
+@single_device_required
+def send_private_message():
+    sender = get_jwt_identity()  # Это логин отправителя
+    print(f"[DEBUG] Отправитель: {sender}")
+
+    # Проверяем тип запроса: multipart (если есть медиа) или JSON
     if request.content_type and request.content_type.startswith("multipart"):
         form = request.form
         to_user = form.get("to_user")
@@ -609,11 +615,23 @@ def send_private_message():
         audio_fn = d.get("audio")
         photo_fn = d.get("photo")
 
-    msg = PrivateMessage(from_user=sender, to_user=to_user,
-                  text=text, audio=audio_fn, photo=photo_fn)
+    print(f"[SAVE] from={sender}, to={to_user}, text={text}")
+
+    if not to_user:
+        return jsonify({"error": "to_user is required"}), 400
+
+    msg = PrivateMessage(
+        from_user=sender,
+        to_user=to_user,
+        text=text,
+        audio=audio_fn,
+        photo=photo_fn
+    )
+
     db.session.add(msg)
     db.session.commit()
-    return jsonify(id=msg.id)
+
+    return jsonify({"id": msg.id}), 200
 
 # ------------------- SOS -------------------
 
