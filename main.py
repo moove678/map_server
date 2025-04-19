@@ -615,55 +615,6 @@ def send_private_message():
     db.session.commit()
     return jsonify(id=msg.id)
 
-
-
-
-
-@app.route("/get_private_messages", methods=["GET"])
-@jwt_required()
-@single_device_required
-def get_private_messages():
-    username = get_jwt_identity()
-    to_user = request.args.get("receiver")
-    after_id = int(request.args.get("after_id", 0))
-
-    # Получаем все входящие и исходящие сообщения между двумя пользователями
-    q = PrivateMessage.query.filter(
-        or_(
-            and_(PrivateMessage.from_user == username, PrivateMessage.to_user == to_user),
-            and_(PrivateMessage.from_user == to_user, PrivateMessage.to_user == username)
-        )
-    )
-
-    if after_id:
-        q = q.filter(PrivateMessage.id > after_id)
-
-    msgs = q.order_by(PrivateMessage.id.asc()).all()
-
-    print("[DEBUG] Получено сообщений:", len(msgs))
-
-
-    for m in msgs:
-        print(f"FROM: {m.from_user} → TO: {m.to_user} | TEXT: {m.text}")
-
-    return jsonify([
-        {
-            "id": m.id,
-            "from_user": m.from_user,
-            "to_user": m.to_user,
-            "text": m.text,
-            "photo": m.photo,
-            "audio": m.audio,
-            "created_at": m.created_at.isoformat()
-        }
-        for m in msgs
-    ])
-
-
-
-
-
-
 # ------------------- SOS -------------------
 
 @app.route("/sos", methods=["POST"])
