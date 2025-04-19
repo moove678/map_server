@@ -605,20 +605,27 @@ def send_private_message():
     db.session.commit()
     return jsonify(id=msg.id)
 
+
 @app.route("/get_private_messages", methods=["GET"])
 @jwt_required()
 @single_device_required
 def get_private_messages():
-    me = get_jwt_identity()
+    receiver = request.args.get("receiver")
     after = int(request.args.get("after_id", 0))
-    q = Message.query.filter_by(receiver=me)
+    me = get_jwt_identity()
+
+    q = Message.query.filter(
+        ((Message.sender == me) & (Message.to_user == receiver)) |
+        ((Message.sender == receiver) & (Message.to_user == me))
+    )
     if after:
         q = q.filter(Message.id > after)
+
     msgs = q.order_by(Message.created_at.asc()).all()
     return jsonify([{
         "id": m.id,
         "from_user": m.sender,
-        "to_user": m.reciver,
+        "to_user": m.to_user,
         "text": m.text,
         "photo": m.photo,
         "audio": m.audio,
