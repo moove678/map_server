@@ -92,6 +92,16 @@ class Message(db.Model):
     photo      = db.Column(db.String(200))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+class PrivateMessage(db.Model):
+    __tablename__ = "private_messages"
+    id         = db.Column(db.Integer, primary_key=True)
+    from_user  = db.Column(db.String(80), db.ForeignKey("users.username"))
+    to_user    = db.Column(db.String(80), db.ForeignKey("users.username"))
+    text       = db.Column(db.Text, default="")
+    audio      = db.Column(db.String(200))
+    photo      = db.Column(db.String(200))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
 class Group(db.Model):
     __tablename__ = "groups"
     id        = db.Column(db.String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -599,7 +609,7 @@ def send_private_message():
         audio_fn = d.get("audio")
         photo_fn = d.get("photo")
 
-    msg = Message(sender=sender, receiver=to_user,
+    msg = PrivateMessage(sender=sender, receiver=to_user,
                   text=text, audio=audio_fn, photo=photo_fn)
     db.session.add(msg)
     db.session.commit()
