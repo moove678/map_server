@@ -524,7 +524,7 @@ def get_messages():
         q = q.filter(Message.id > after)
     msgs = q.order_by(Message.created_at.asc()).all()
     return jsonify([{
-        "id": m.id, "from": m.sender, "text": m.text,
+        "group_id": m.group_id, "id": m.id, "from": m.sender, "text": m.text,
         "photo": m.photo, "audio": m.audio,
         "created_at": m.created_at.isoformat()
     } for m in msgs])
