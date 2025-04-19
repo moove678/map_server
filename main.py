@@ -1,4 +1,3 @@
-(venv) name@DESKTOP-CSH0P1G:~/map_server$ cat main.py
 import os
 import uuid
 import logging
