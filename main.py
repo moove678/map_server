@@ -631,9 +631,8 @@ def get_private_messages():
     msgs = q.order_by(PrivateMessage.id.asc()).all()
 
     print("[DEBUG] Получено сообщений:", len(msgs))
-for m in msgs:
+    for m in msgs:
     print(f"FROM: {m.from_user} → TO: {m.to_user} | TEXT: {m.text}")
-
 
     return jsonify([
         {
