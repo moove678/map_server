@@ -614,7 +614,11 @@ def send_private_message():
 def get_private_messages():
     me = get_jwt_identity()
     after = int(request.args.get("after_id", 0))
-    q = Message.query.filter_by(receiver=me)
+
+    q = Message.query.filter(
+        or_(Message.sender == me, Message.receiver == me)
+    )
+
     if after:
         q = q.filter(Message.id > after)
     msgs = q.order_by(Message.created_at.asc()).all()
