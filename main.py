@@ -593,7 +593,7 @@ def send_private_message():
         text = form.get("text", "")
         audio_fn, photo_fn = _store_media_from_request()
     else:
-        d = request.json
+        d = request.json or {}
         to_user = d.get("to_user")
         text = d.get("text", "")
         audio_fn = d.get("audio")
