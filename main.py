@@ -594,10 +594,6 @@ def reject_invite():
 @app.route("/send_private_message", methods=["POST"])
 @jwt_required()
 @single_device_required
-
-@app.route("/send_private_message", methods=["POST"])
-@jwt_required()
-@single_device_required
 def send_private_message():
     sender = get_jwt_identity()  # Это логин отправителя
     print(f"[DEBUG] Отправитель: {sender}")
