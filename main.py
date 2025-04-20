@@ -194,7 +194,7 @@ def save_uploaded_file(file_storage, ext):
 def _store_media_from_request():
     audio_fn = photo_fn = None
     if "audio" in request.files:
-        audio_fn = save_uploaded_file(request.files["audio"], "wav")
+        audio_fn = save_uploaded_file(request.files["audio"], "3gp")
     if "photo" in request.files:
         photo_fn = save_uploaded_file(request.files["photo"], "jpg")
     return audio_fn, photo_fn
