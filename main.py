@@ -454,6 +454,13 @@ def join_group():
     _remove_from_all_groups(usr)
     grp.members.append(usr)
     db.session.commit()
+
+    # Сохраняем момент входа
+    last_msg_id = db.session.query(db.func.max(Message.id)).filter_by(group_id=grp.id).scalar() or 0
+    member = db.session.query(GroupMember).filter_by(user_id=usr.id, group_id=grp.id).first()
+    if member:
+        member.joined_msg_id = last_msg_id
+        db.session.commit()
     return jsonify(ok=True)
 
 @app.route("/leave_group", methods=["POST"])
@@ -534,13 +541,25 @@ def send_message():
 def get_messages():
     gid = request.args.get("group_id")
     after = int(request.args.get("after_id", 0))
-    q = Message.query.filter_by(group_id=gid)
-    if after:
-        q = q.filter(Message.id > after)
+    user_id = get_jwt_identity()
+
+    member = db.session.query(GroupMember).filter_by(user_id=user_id, group_id=gid).first()
+    if not member:
+        return jsonify([])
+
+    joined_id = member.joined_msg_id or 0
+    min_id = max(after, joined_id)
+
+    q = Message.query.filter_by(group_id=gid).filter(Message.id > min_id)
     msgs = q.order_by(Message.created_at.asc()).all()
+
     return jsonify([{
-        "group_id": m.group_id, "id": m.id, "from": m.sender, "text": m.text,
-        "photo": m.photo, "audio": m.audio,
+        "group_id": m.group_id,
+        "id": m.id,
+        "from": m.sender,
+        "text": m.text,
+        "photo": m.photo,
+        "audio": m.audio,
         "created_at": m.created_at.isoformat()
     } for m in msgs])
 
