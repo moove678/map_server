@@ -115,7 +115,7 @@ class Group(db.Model):
 
 class GroupMember(db.Model):
     __tablename__ = "group_members"
-    username = db.Column(db.String(80), db.ForeignKey("users.username"), primary_key=True)
+    user_id = db.Column(db.String(80), db.ForeignKey("users.username"), primary_key=True)
     group_id = db.Column(db.String(36), db.ForeignKey("groups.id"), primary_key=True)
     joined_msg_id = db.Column(db.Integer, default=0)
     joined_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -542,9 +542,9 @@ def send_message():
 def get_messages():
     gid = request.args.get("group_id")
     after = int(request.args.get("after_id", 0))
-    username = get_jwt_identity()
+    user_id = get_jwt_identity()
 
-    member = db.session.query(GroupMember).filter_by(username=user_id, group_id=gid).first()
+    member = db.session.query(GroupMember).filter_by(user_id=user_id, group_id=gid).first()
     if not member:
         return jsonify([])
 
