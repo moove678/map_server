@@ -462,6 +462,11 @@ def join_group():
     if member:
         member.joined_msg_id = last_msg_id
         db.session.commit()
+
+    # Удаляем старые инвайты в эту группу
+    Invite.query.filter_by(to_user=usr.username, group_id=grp.id).delete()
+    db.session.commit()
+
     return jsonify(ok=True)
 
 @app.route("/leave_group", methods=["POST"])
