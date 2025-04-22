@@ -458,7 +458,7 @@ def join_group():
 
     # Сохраняем момент входа
     last_msg_id = db.session.query(db.func.max(Message.id)).filter_by(group_id=grp.id).scalar() or 0
-    member = db.session.query(GroupMember).filter_by(user_id=usr.id, group_id=grp.id).first()
+    member = db.session.query(GroupMember).filter_by(user_id=usr.username, group_id=grp.id).first()
     if member:
         member.joined_msg_id = last_msg_id
         db.session.commit()
