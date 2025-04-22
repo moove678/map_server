@@ -113,11 +113,12 @@ class Group(db.Model):
 
     members = db.relationship("User", secondary="group_members", back_populates="groups")
 
-group_members = db.Table(
-    "group_members",
-    db.Column("group_id", db.String(36), db.ForeignKey("groups.id")),
-    db.Column("username", db.String(80), db.ForeignKey("users.username")),
-)
+class GroupMember(db.Model):
+    __tablename__ = "group_members"
+    user_id = db.Column(db.String(80), db.ForeignKey("users.username"), primary_key=True)
+    group_id = db.Column(db.String(36), db.ForeignKey("groups.id"), primary_key=True)
+    joined_msg_id = db.Column(db.Integer, default=0)
+    joined_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Invite(db.Model):
     __tablename__ = "invites"
