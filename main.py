@@ -190,7 +190,7 @@ def save_uploaded_file(file_storage, ext):
     filename = f"{uuid.uuid4()}.{ext}"
     path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
     file_storage.save(path)
-    return f"uploads/{filename}"
+    return filename
 
 def _store_media_from_request():
     audio_fn = photo_fn = None
