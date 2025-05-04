@@ -336,16 +336,19 @@ def sync():
     gid = req.get("group_id")
     if gid:
         last_iso = req.get("last_msg_time")
-        q = Message.query.filter_by(group_id=gid)
+        member = db.session.query(GroupMember).filter_by(user_id=me_name, group_id=gid).first()
+        joined_id = member.joined_msg_id if member else 0
+
+        q = Message.query.filter_by(group_id=gid).filter(Message.id > joined_id)
         if last_iso:
             q = q.filter(Message.created_at > datetime.fromisoformat(last_iso))
+
         msgs = q.order_by(Message.created_at.asc()).all()
         new_group_msgs = [{
             "id": m.id, "from": m.sender, "text": m.text,
             "photo": m.photo, "audio": m.audio,
             "created_at": m.created_at.isoformat()
         } for m in msgs]
-
     # Приватные сообщения
 
     last_private_id = req.get("last_private_id", 0)
