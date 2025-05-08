@@ -540,6 +540,9 @@ def send_message():
 
     msg = Message(group_id=group_id, sender=sender,
                   text=text, audio=audio_fn, photo=photo_fn)
+
+    print(f"[PHOTO_DEBUG] photo_fn = {photo_fn}")
+    print(f"[PHOTO_DEBUG] request.files = {request.files}")
     db.session.add(msg)
     db.session.commit()
     return jsonify(id=msg.id)
