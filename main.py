@@ -796,7 +796,15 @@ def list_routes():
         } for r in routes
     ])
 
-
+@app.route("/_debug/list_uploads", methods=["GET"])
+def debug_list_uploads():
+    # Вернёт список файлов в папке UPLOAD_FOLDER
+    files = []
+    try:
+        files = os.listdir(app.config["UPLOAD_FOLDER"])
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+    return jsonify(uploads=files)
 # ------------------- Запуск -------------------
 
 if __name__ == "__main__":
