@@ -6,6 +6,7 @@ import math
 from datetime import datetime, timedelta
 from functools import wraps
 from sqlalchemy import or_, and_
+from flask import send_from_directory
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -202,8 +203,12 @@ def _store_media_from_request():
 
 @app.route("/uploads/<filename>")
 def serve_upload(filename):
-    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
-
+    # app.root_path — это корень вашего приложения
+    upload_dir = os.path.join(app.root_path, app.config["UPLOAD_FOLDER"])
+    # на всякий случай проверим, что папка действительно там
+    if not os.path.isdir(upload_dir):
+        return jsonify(error=f"Upload folder not found: {upload_dir}"), 500
+    return send_from_directory(upload_dir, filename)
 # ------------------- Регистрация / логин / логаут -------------------
 
 @app.route("/register", methods=["POST"])
