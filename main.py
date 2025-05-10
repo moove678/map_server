@@ -6,7 +6,6 @@ import math
 from datetime import datetime, timedelta
 from functools import wraps
 from sqlalchemy import or_, and_
-from flask import send_from_directory
 from flask import Flask, request, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
@@ -203,12 +202,8 @@ def _store_media_from_request():
 
 @app.route("/uploads/<filename>")
 def serve_upload(filename):
-    # app.root_path — это корень вашего приложения
-    upload_dir = os.path.join(app.root_path, app.config["UPLOAD_FOLDER"])
-    # на всякий случай проверим, что папка действительно там
-    if not os.path.isdir(upload_dir):
-        return jsonify(error=f"Upload folder not found: {upload_dir}"), 500
-    return send_from_directory(upload_dir, filename)
+    return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
+
 # ------------------- Регистрация / логин / логаут -------------------
 
 @app.route("/register", methods=["POST"])
@@ -423,46 +418,34 @@ def sync():
 
 
 # ------------------- Группы -------------------
+
 def _remove_from_all_groups(user: User):
-    memberships = db.session.query(GroupMember).filter_by(user_id=user.username).all()
+    for g in list(user.groups):
+        g.members.remove(user)
+        # если группа осталась пустой, снести её
+        if len(g.members) == 0 and g.created and datetime.utcnow() - g.created >= timedelta(minutes=1):
+            db.session.delete(g)
 
-    for membership in memberships:
-        group = Group.query.get(membership.group_id)
-        if group:
-            group.members.remove(user)
-            # Если группа пуста и старая — удалить
-            if len(group.members) == 0 and group.created and datetime.utcnow() - group.created >= timedelta(minutes=1):
-                db.session.delete(group)
-
-        db.session.delete(membership)
-
-    db.session.commit()
 @app.route("/create_group", methods=["POST"])
 @jwt_required()
 @single_device_required
 def create_group():
-d = request.json
+    d = request.json
+    if Group.query.filter_by(name=d["name"]).first():
+        return jsonify(error="exists"), 400
+    usr = User.query.get(get_jwt_identity())
+    _remove_from_all_groups(usr)
+    grp = Group(
+        name=d["name"],
+        lat=d.get("lat", 0.0),
+        lon=d.get("lon", 0.0),
+        is_public=d.get("is_public", True)
+    )
+    grp.members.append(usr)
+    db.session.add(grp)
+    db.session.commit()
+    return jsonify(group_id=grp.id)
 
-if Group.query.filter_by(name=d["name"]).first():
-    return jsonify(error="exists"), 400
-
-usr = User.query.get(get_jwt_identity())
-_remove_from_all_groups(usr)
-
-grp = Group(
-    name=d["name"],
-    is_public=d.get("is_public", True)
-)
-
-# Задаём координаты напрямую:
-grp.lat = d.get("lat", 0.0)
-grp.lon = d.get("lon", 0.0)
-
-grp.members.append(usr)
-db.session.add(grp)
-db.session.commit()
-
-return jsonify(group_id=grp.id)
 @app.route("/join_group", methods=["POST"])
 @jwt_required()
 @single_device_required
@@ -813,15 +796,7 @@ def list_routes():
         } for r in routes
     ])
 
-@app.route("/_debug/list_uploads", methods=["GET"])
-def debug_list_uploads():
-    # Вернёт список файлов в папке UPLOAD_FOLDER
-    files = []
-    try:
-        files = os.listdir(app.config["UPLOAD_FOLDER"])
-    except Exception as e:
-        return jsonify(error=str(e)), 500
-    return jsonify(uploads=files)
+
 # ------------------- Запуск -------------------
 
 if __name__ == "__main__":
