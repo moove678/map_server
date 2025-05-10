@@ -437,27 +437,32 @@ def _remove_from_all_groups(user: User):
         db.session.delete(membership)
 
     db.session.commit()
-
 @app.route("/create_group", methods=["POST"])
 @jwt_required()
 @single_device_required
 def create_group():
-    d = request.json
-    if Group.query.filter_by(name=d["name"]).first():
-        return jsonify(error="exists"), 400
-    usr = User.query.get(get_jwt_identity())
-    _remove_from_all_groups(usr)
-    grp = Group(
-        name=d["name"],
-        lat=d.get("lat", 0.0),
-        lon=d.get("lon", 0.0),
-        is_public=d.get("is_public", True)
-    )
-    grp.members.append(usr)
-    db.session.add(grp)
-    db.session.commit()
-    return jsonify(group_id=grp.id)
+d = request.json
 
+if Group.query.filter_by(name=d["name"]).first():
+    return jsonify(error="exists"), 400
+
+usr = User.query.get(get_jwt_identity())
+_remove_from_all_groups(usr)
+
+grp = Group(
+    name=d["name"],
+    is_public=d.get("is_public", True)
+)
+
+# Задаём координаты напрямую:
+grp.lat = d.get("lat", 0.0)
+grp.lon = d.get("lon", 0.0)
+
+grp.members.append(usr)
+db.session.add(grp)
+db.session.commit()
+
+return jsonify(group_id=grp.id)
 @app.route("/join_group", methods=["POST"])
 @jwt_required()
 @single_device_required
