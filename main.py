@@ -430,6 +430,7 @@ def _remove_from_all_groups(user: User):
         # если группа осталась пустой, снести её
         if len(g.members) == 0 and g.created and datetime.utcnow() - g.created >= timedelta(minutes=1):
             db.session.delete(g)
+            db.session.commit()
 
 @app.route("/create_group", methods=["POST"])
 @jwt_required()
