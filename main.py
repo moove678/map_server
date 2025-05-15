@@ -204,6 +204,10 @@ def _store_media_from_request():
 def serve_upload(filename):
     return send_from_directory(app.config["UPLOAD_FOLDER"], filename)
 
+@app.route("/uploads")
+def list_uploads():
+    files = os.listdir(app.config["UPLOAD_FOLDER"])
+    return jsonify(files)
 # ------------------- Регистрация / логин / логаут -------------------
 
 @app.route("/register", methods=["POST"])
