@@ -72,9 +72,6 @@ class User(db.Model):
     )
 
     groups = db.relationship("Group", secondary="group_members", back_populates="members")
-    # --- SOS_EXT ---
-    rating = db.Column(db.Integer, default=0)
-    banned = db.Column(db.Boolean, default=False)
 
     def to_json(self):
         return {
@@ -133,20 +130,13 @@ class Invite(db.Model):
 
 class Sos(db.Model):
     __tablename__ = "sos"
-    id = db.Column(db.Integer, primary_key=True)
+    id       = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), db.ForeignKey("users.username"))
-    lat = db.Column(db.Float)
-    lon = db.Column(db.Float)
-    comment = db.Column(db.Text, default="")
-    # --- SOS_EXT ---
-    status = db.Column(db.String(20), default="средняя")  # срочность
-    is_danger = db.Column(db.Boolean, default=False)      # опасность для жизни
-    photos = db.Column(db.String(500))                    # имена файлов через запятую
-    active = db.Column(db.Boolean, default=True)
-    rescuer = db.Column(db.String(80), nullable=True)
-    closed = db.Column(db.Boolean, default=False)
-    # --- SOS_EXT ---
-    created = db.Column(db.DateTime, default=datetime.utcnow)
+    lat      = db.Column(db.Float)
+    lon      = db.Column(db.Float)
+    comment  = db.Column(db.Text, default="")
+    photo    = db.Column(db.String(200))
+    created  = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Route(db.Model):
     __tablename__ = "routes"
@@ -176,45 +166,10 @@ class RouteComment(db.Model):
     photo    = db.Column(db.String(200))
     ts       = db.Column(db.DateTime, default=datetime.utcnow)
 
-# --- SOS_EXT ---
-class SosReport(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    sos_id = db.Column(db.Integer, db.ForeignKey("sos.id"))
-    reporter = db.Column(db.String(80))
-    comment = db.Column(db.Text)
-    created = db.Column(db.DateTime, default=datetime.utcnow)
-# --- SOS_EXT ---
 
 # ------------------- Хелперы авторизации -------------------
 
 from flask_jwt_extended import get_jwt_identity, get_jwt
-def sos_to_json(s, show_reports=False):
-    photos = (s.photos or "").split(",") if s.photos else []
-    return {
-        "id": s.id,
-        "user": s.username,
-        "lat": s.lat,
-        "lon": s.lon,
-        "comment": s.comment,
-        "status": getattr(s, "status", "средняя"),
-        "is_danger": getattr(s, "is_danger", False),
-        "photos": [f"/uploads/{fn}" for fn in photos if fn],
-        "active": getattr(s, "active", True),
-        "rescuer": getattr(s, "rescuer", None),
-        "closed": getattr(s, "closed", False),
-        "created": s.created.isoformat(),
-        # --- SOS_EXT ---
-        "reports": [
-            {
-                "reporter": r.reporter,
-                "comment": r.comment,
-                "created": r.created.isoformat()
-            }
-            for r in SosReport.query.filter_by(sos_id=s.id).all()
-        ] if show_reports else None,
-        # --- SOS_EXT ---
-    }
-
 
 def single_device_required(fn):
     @wraps(fn)
@@ -422,11 +377,16 @@ def sync():
     # SOS
     new_sos = []
     last_sos_iso = req.get("last_sos_time")
-    q_sos = Sos.query.filter_by(active=True)
+    q_sos = Sos.query
     if last_sos_iso:
         q_sos = q_sos.filter(Sos.created > datetime.fromisoformat(last_sos_iso))
     soses = q_sos.order_by(Sos.created.asc()).all()
-    new_sos = [sos_to_json(s) for s in soses]
+    new_sos = [{
+        "id": s.id, "user": s.username,
+        "lat": s.lat, "lon": s.lon,
+        "comment": s.comment, "photo": s.photo,
+        "created": s.created.isoformat()
+    } for s in soses]
 
     # Статус группы
     group_status = {}
@@ -715,42 +675,30 @@ def send_private_message():
 @jwt_required()
 @single_device_required
 def sos():
-    files = []
-    status = "средняя"
-    is_danger = False
     if request.content_type and request.content_type.startswith("multipart"):
         f = request.form
         lat = float(f["lat"])
         lon = float(f["lon"])
         comment = f.get("comment", "")
-        status = f.get("status", "средняя")
-        is_danger = f.get("is_danger", "false").lower() == "true"
-        # До 3-х файлов: photo1, photo2, photo3
-        for key in ["photo1", "photo2", "photo3"]:
-            if key in request.files:
-                fn = save_uploaded_file(request.files[key], "jpg")
-                files.append(fn)
+        photo_fn, _ = _store_media_from_request()
     else:
         d = request.json or {}
         lat = d.get("lat", 0.0)
         lon = d.get("lon", 0.0)
         comment = d.get("comment", "")
-        status = d.get("status", "средняя")
-        is_danger = bool(d.get("is_danger", False))
-        if d.get("photos"):
-            files = d["photos"] if isinstance(d["photos"], list) else [d["photos"]]
+        photo_fn = d.get("photo")
+
     entry = Sos(
         username=get_jwt_identity(),
         lat=lat, lon=lon,
         comment=comment,
-        status=status,
-        is_danger=is_danger,
-        photos=",".join(files)
+        photo=photo_fn
     )
     db.session.add(entry)
     db.session.commit()
     logging.warning("SOS from %s @ %s,%s", entry.username, entry.lat, entry.lon)
     return jsonify(id=entry.id)
+
 
 # ------------------- Маршруты (create / points / comments / list) -------------------
 
@@ -853,77 +801,6 @@ def list_routes():
     ])
 
 
-@app.route("/report_sos", methods=["POST"])
-@jwt_required()
-def report_sos():
-    d = request.json
-    sos_id = d.get("sos_id")
-    comment = d.get("comment", "")
-    sos = Sos.query.get(sos_id)
-    if not sos or not sos.active:
-        return jsonify(error="not_found"), 404
-    reporter = get_jwt_identity()
-    if reporter == sos.username:
-        return jsonify(error="self_report"), 400
-    already = SosReport.query.filter_by(sos_id=sos_id, reporter=reporter).first()
-    if already:
-        return jsonify(error="already_reported"), 400
-    db.session.add(SosReport(sos_id=sos_id, reporter=reporter, comment=comment))
-    db.session.commit()
-    # Автоскрытие после 3 жалоб
-    if SosReport.query.filter_by(sos_id=sos_id).count() >= 3:
-        sos.active = False
-        db.session.commit()
-    return jsonify(success=True)
-
-@app.route("/delete_sos", methods=["POST"])
-@jwt_required()
-def delete_sos():
-    sos_id = request.json.get("sos_id")
-    sos = Sos.query.get(sos_id)
-    user = get_jwt_identity()
-    if not sos or not sos.active:
-        return jsonify(error="not_found"), 404
-    if sos.username != user and user != "admin":
-        return jsonify(error="forbidden"), 403
-    sos.active = False
-    sos.closed = True
-    db.session.commit()
-    return jsonify(success=True)
-
-@app.route("/resolve_sos", methods=["POST"])
-@jwt_required()
-def resolve_sos():
-    sos_id = request.json.get("sos_id")
-    sos = Sos.query.get(sos_id)
-    helper = get_jwt_identity()
-    if not sos or not sos.active or sos.closed:
-        return jsonify(error="not_found"), 404
-    if helper == sos.username:
-        return jsonify(error="self_help"), 400
-    sos.rescuer = helper
-    sos.closed = True
-    sos.active = False
-    db.session.commit()
-    rescuer = User.query.get(helper)
-    if rescuer:
-        rescuer.rating = (rescuer.rating or 0) + 1
-        db.session.commit()
-    return jsonify(success=True)
-
-@app.route("/ban_user", methods=["POST"])
-@jwt_required()
-def ban_user():
-    user = get_jwt_identity()
-    if user != "admin":
-        return jsonify(error="forbidden"), 403
-    target = request.json.get("username")
-    u = User.query.get(target)
-    if not u:
-        return jsonify(error="not_found"), 404
-    u.banned = True
-    db.session.commit()
-    return jsonify(success=True)
 # ------------------- Запуск -------------------
 
 if __name__ == "__main__":
