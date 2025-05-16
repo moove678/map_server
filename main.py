@@ -422,7 +422,7 @@ def sync():
     # SOS
     new_sos = []
     last_sos_iso = req.get("last_sos_time")
-    q_sos = Sos.query.filter_by(active=True)
+    q_sos = Sos.query.filter(and_(Sos.active == True, Sos.closed == False))
     if last_sos_iso:
         q_sos = q_sos.filter(Sos.created > datetime.fromisoformat(last_sos_iso))
     soses = q_sos.order_by(Sos.created.asc()).all()
