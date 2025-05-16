@@ -883,12 +883,16 @@ def delete_sos():
     sos = Sos.query.get(sos_id)
     user = get_jwt_identity()
     if not sos or not sos.active:
+        print(f"[DELETE_SOS] SOS {sos_id} not found!")
         return jsonify(error="not_found"), 404
+    print(f"[DELETE_SOS] Found SOS {sos_id} by {sos.username}, active={sos.active}, closed={sos.closed}")
     if sos.username != user and user != "admin":
+        print(f"[DELETE_SOS] Forbidden for user {user}")
         return jsonify(error="forbidden"), 403
     sos.active = False
     sos.closed = True
     db.session.commit()
+    print(f"[DELETE_SOS] SOS {sos_id} marked as inactive and closed")
     return jsonify(success=True)
 
 @app.route("/resolve_sos", methods=["POST"])
